@@ -1,6 +1,6 @@
 export type Asset='USDG'|'NVDA';
 export type Draft={id:string;kind:string;asset:Asset;amount:string;fee:string;net:string;createdAt:string;details:Record<string,string>;status:'Prepared'};
-export function parseUnits(value:string):bigint {if(!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(value))throw new Error('Enter a valid amount with up to 18 decimal places.');const [a,b='']=value.split('.');const units=BigInt(a)*10n**18n+BigInt(b.padEnd(18,'0'));if(units<=0n||units>=2n**128n)throw new Error('Enter an amount greater than zero and within the supported range.');return units;}
+export function parseUnits(value:string):bigint {if(!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(value))throw new Error('Enter a valid amount with up to 18 decimal places.');const [a='',b='']=value.split('.');const units=BigInt(a)*10n**18n+BigInt(b.padEnd(18,'0'));if(units<=0n||units>=2n**128n)throw new Error('Enter an amount greater than zero and within the supported range.');return units;}
 export function formatUnits(units:bigint):string {const whole=units/10n**18n;const frac=(units%10n**18n).toString().padStart(18,'0').replace(/0+$/,'');return whole.toString()+(frac?'.'+frac:'');}
 export function quote(amount:string,feeBps=20){const units=parseUnits(amount);const fee=units*BigInt(feeBps)/10000n;return{amount:formatUnits(units),fee:formatUnits(fee),net:formatUnits(units-fee)};}
 export function isHex(value:string,bytes?:number){return /^0x[0-9a-f]+$/i.test(value)&&value.length%2===0&&(!bytes||value.length===bytes*2+2);}
