@@ -12,7 +12,7 @@ export default function Dashboard({path}:{path:string}){const {wallet,connect,na
  useEffect(()=>{setFormError('');setSideOpen(false);setFilter('');setAmount('')},[section]);
  useEffect(()=>{try{localStorage.setItem('curtain-plans-v1',JSON.stringify(drafts))}catch{setToast('Device storage is unavailable. This session is still available.')}},[drafts]);
  useEffect(()=>{if(!toast)return;const timer=setTimeout(()=>setToast(''),4000);return()=>clearTimeout(timer)},[toast]);
- useEffect(()=>{if(selected){const node=detail.current;const before=document.body.style.overflow;document.body.style.overflow='hidden';node?.showModal();return()=>{node?.close();document.body.style.overflow=before}}},[selected]);
+ useEffect(()=>{if(selected){const node=detail.current;const before=document.body.style.overflow;document.body.style.overflow='hidden';node?.showModal();return()=>{node?.close();document.body.style.overflow=before}}}return undefined},[selected]);
  function prepare(kind:string,details:Record<string,string>,withAmount=true){try{const q=withAmount?(details['inputUnit']?.startsWith('Vault shares')?{amount:formatUnits(parseUnits(amount)),fee:'Requires live NAV',net:'Requires live NAV'}:quote(amount)):{amount:'0',fee:'0',net:'0'};const d:Draft={id:crypto.randomUUID(),kind,asset, ...q,createdAt:new Date().toISOString(),details:{...details,provingMode:prover==='local'?'Local':'Assisted'},status:'Prepared'};setDrafts(prev=>[d,...prev].slice(0,100));setSelected(d);setFormError('')}catch(e){setFormError((e as Error).message)}}
  const shortWallet=wallet?`${wallet.slice(0,6)}…${wallet.slice(-4)}`:'';
  const visibleDrafts=drafts.filter(d=>(d.kind+' '+d.asset+' '+d.id).toLowerCase().includes(filter.toLowerCase()));
