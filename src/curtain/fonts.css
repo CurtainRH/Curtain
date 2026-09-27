@@ -1,0 +1,63 @@
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/060a7af3-36a0-45f3-a65f-ae04166db361/font-0.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/17ef904b-1af9-4934-bf43-19eba2f53b1a/font-1.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/007d86f1-25d8-4a0d-9a9f-14f24bef922e/font-2.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/1fdaa27b-a284-4c63-bc40-885f7cb05076/font-3.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/956ef99a-9722-4272-8e93-25fab1fd8e16/font-4.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/c4c2d155-4e2f-4751-8850-62e00f2a7a0d/font-5.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/37008526-c1ff-4c23-bf48-3be7c0b216a0/font-6.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/2531a0c4-3021-4205-8f1f-bdf01cf229bb/font-7.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/__l5e/assets-v1/09501070-c028-4d68-9a7a-40303d69e9c9/font-8.ttf) format('truetype');
+}

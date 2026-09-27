@@ -8,3 +8,9 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+## Project structure
+
+- The Curtain site lives in `src/curtain/` and keeps its own history-based in-page router; route files under `src/routes/` (`/`, `/app`, `/app/$`, `/legal/$type`) mount it through `src/components/CurtainApp.tsx`, so deep links work while the original experience stays intact.
+- `CurtainApp` renders client-only (lazy + `ClientOnly`) because the experience uses window, audio, GSAP and wallet APIs at mount.
+- Curtain artwork, films and fonts are CDN assets: pointers in `src/assets/curtain/*.asset.json`, referenced by URL from the curtain CSS/TSX, keeping ~30 MB of media out of the repo.
