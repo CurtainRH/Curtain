@@ -9,9 +9,14 @@
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "demo:stealth": "bun run src/demo-stealth.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@curtain/sdk": "workspace:*",
+    "viem": "^2.57.0"
   }
 }

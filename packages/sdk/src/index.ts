@@ -7,3 +7,5 @@ export const name = "sdk" as const;
 export function ready(): boolean {
   return true;
 }
+
+export * from "./stealth";

@@ -9,7 +9,7 @@
     "apps/*"
   ],
   "scripts": {
-    "test": "bun test",
+    "test": "bun test --path-ignore-patterns '**/contracts/lib/**'",
     "typecheck": "bun run --filter='*' typecheck",
     "lint": "bun run --filter='*' lint",
     "build": "bun run --filter='*' build"
