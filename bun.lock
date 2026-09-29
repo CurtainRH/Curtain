@@ -62,6 +62,9 @@
     "services/broadcaster": {
       "name": "@curtain/broadcaster",
       "version": "0.0.1",
+      "dependencies": {
+        "viem": "^2.57.0",
+      },
       "devDependencies": {
         "typescript": "^5.6.3",
       },
