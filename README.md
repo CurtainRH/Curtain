@@ -53,9 +53,9 @@ cd contracts && forge test   # contracts
 | # | Milestone | Status |
 |---|---|---|
 | M0 | Repo + toolchain + CI | ✅ done |
-| M1 | Stealth v0 | pending |
-| M2 | Circuits | pending |
-| M3 | Pool | pending |
+| M1 | Stealth v0 | ✅ done |
+| M2 | Circuits | ✅ done |
+| M3 | Pool | ✅ done |
 | M4 | Gate + PPOI | pending |
 | M5 | Wallet SDK + web | pending |
 | M6 | RelayAdapt + recipes v1 | pending |
