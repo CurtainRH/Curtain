@@ -64,7 +64,7 @@ cd contracts && forge test   # contracts
 | M9 | Morpho / Arcus / Prism recipes | ✅ done |
 | M10 | Disclosure + Solvency | ✅ done |
 | M11 | Staking + fees | ✅ done |
-| M12 | Mainnet | pending |
+| M12 | Mainnet | ✅ done |
 
 ## Copy rules
 
