@@ -102,6 +102,7 @@ describe("ppoi-node: clears a shield in < 2 min (M4 acceptance)", () => {
       const ppoiVerifierArtifact = loadArtifact("PpoiDevGroth16Verifier");
       const ppoiAdapterArtifact = loadArtifact("PpoiDevVerifierAdapter");
       const mockVerifierArtifact = loadArtifact("MockJoinSplitVerifier");
+      const mockUnshieldVerifierArtifact = loadArtifact("MockUnshieldVerifier");
       const curtainPoolArtifact = loadArtifact("CurtainPool");
       const erc20Artifact = loadArtifact("MockERC20");
 
@@ -124,8 +125,10 @@ describe("ppoi-node: clears a shield in < 2 min (M4 acceptance)", () => {
       const screeningGateAddr = await deploy(screeningGateArtifact, [hasherT2, hasherT3, ppoiAdapterAddr, deployer]);
       const mockVerifier2x2 = await deploy(mockVerifierArtifact);
       const mockVerifier3x3 = await deploy(mockVerifierArtifact);
+      const mockUnshieldVerifier = await deploy(mockUnshieldVerifierArtifact);
       const poolAddr = await deploy(curtainPoolArtifact, [
-        hasherT3, hasherT5, assetGateAddr, screeningGateAddr, mockVerifier2x2, mockVerifier3x3, deployer, 20, 20,
+        hasherT3, hasherT5, assetGateAddr, screeningGateAddr, mockVerifier2x2, mockVerifier3x3,
+        mockUnshieldVerifier, deployer, 20, 20,
       ]);
 
       await deployerClient.writeContract({

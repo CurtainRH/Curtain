@@ -7,6 +7,7 @@ import {AssetGate} from "../../src/config/AssetGate.sol";
 import {PoseidonT3Deployer} from "../../src/lib/PoseidonT3.sol";
 import {PoseidonT5Deployer, IPoseidonT5} from "../../src/lib/PoseidonT5.sol";
 import {MockJoinSplitVerifier} from "../mocks/MockJoinSplitVerifier.sol";
+import {MockUnshieldVerifier} from "../mocks/MockUnshieldVerifier.sol";
 import {MockScreeningGate} from "../mocks/MockScreeningGate.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
@@ -19,6 +20,7 @@ contract CurtainPoolTest is Test {
     MockScreeningGate internal screeningGate;
     MockJoinSplitVerifier internal verifier2x2;
     MockJoinSplitVerifier internal verifier3x3;
+    MockUnshieldVerifier internal unshieldVerifier;
     MockERC20 internal token;
     IPoseidonT5 internal poseidonT5;
 
@@ -36,6 +38,7 @@ contract CurtainPoolTest is Test {
         screeningGate = new MockScreeningGate();
         verifier2x2 = new MockJoinSplitVerifier();
         verifier3x3 = new MockJoinSplitVerifier();
+        unshieldVerifier = new MockUnshieldVerifier();
 
         pool = new CurtainPool(
             PoseidonT3Deployer(hasherT3).hasher(),
@@ -44,6 +47,7 @@ contract CurtainPoolTest is Test {
             address(screeningGate),
             address(verifier2x2),
             address(verifier3x3),
+            address(unshieldVerifier),
             treasury,
             FEE_BPS,
             FEE_BPS
@@ -160,7 +164,7 @@ contract CurtainPoolTest is Test {
         uint256 expectedPayout = netAmount - unshieldFee;
         uint256 treasuryBefore = token.balanceOf(treasury);
 
-        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222, 1, hex"");
 
         assertEq(token.balanceOf(alice), 1_000 ether - 100 ether + expectedPayout);
         assertEq(token.balanceOf(treasury), treasuryBefore + unshieldFee);
@@ -173,7 +177,7 @@ contract CurtainPoolTest is Test {
         (bytes32 commit,, uint256 netAmount) = _shield(alice, 50 ether, 5, 6);
 
         vm.prank(bob);
-        pool.unshieldToOrigin(commit, address(token), netAmount, 5, 6);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 5, 6, 2, hex"");
 
         assertGt(token.balanceOf(alice), 1_000 ether - 50 ether);
         assertEq(token.balanceOf(bob), 0);
@@ -181,23 +185,24 @@ contract CurtainPoolTest is Test {
 
     function test_unshieldToOrigin_revertsForUnknownCommit() public {
         vm.expectRevert(CurtainPool.NotOrigin.selector);
-        pool.unshieldToOrigin(bytes32(uint256(0xdead)), address(token), 1 ether, 1, 1);
+        pool.unshieldToOrigin(bytes32(uint256(0xdead)), address(token), 1 ether, 1, 1, 3, hex"");
     }
 
     function test_unshieldToOrigin_revertsIfOpeningDoesNotMatchCommit() public {
         (bytes32 commit,, uint256 netAmount) = _shield(alice, 20 ether, 111, 222);
 
         vm.expectRevert(CurtainPool.InvalidProof.selector);
-        pool.unshieldToOrigin(commit, address(token), netAmount, 999, 222); // wrong ownerPkX
+        pool.unshieldToOrigin(commit, address(token), netAmount, 999, 222, 4, hex""); // wrong ownerPkX
     }
 
     function test_unshieldToOrigin_cannotBeReplayed() public {
         (bytes32 commit,, uint256 netAmount) = _shield(alice, 20 ether, 111, 222);
+        uint256 nullifier = 5;
 
-        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222, nullifier, hex"");
 
         vm.expectRevert(CurtainPool.AlreadyUnshielded.selector);
-        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222, nullifier, hex"");
     }
 
     function test_unshieldToOrigin_worksEvenWhenGateSaysNotSpendable() public {
@@ -206,8 +211,66 @@ contract CurtainPoolTest is Test {
         (bytes32 commit,, uint256 netAmount) = _shield(alice, 20 ether, 111, 222);
         screeningGate.setSpendable(false);
 
-        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222, 6, hex"");
         assertEq(token.balanceOf(address(pool)), 0);
+    }
+
+    function test_unshieldToOrigin_revertsWhenUnshieldVerifierRejects() public {
+        (bytes32 commit,, uint256 netAmount) = _shield(alice, 20 ether, 111, 222);
+        unshieldVerifier.setResult(false);
+
+        vm.expectRevert(CurtainPool.InvalidProof.selector);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222, 7, hex"");
+    }
+
+    /// Regression test for the double-spend this milestone's unshield
+    /// nullifier unification fixed: a note already spent via transact()'s
+    /// join-split nullifier must not also be unshieldable via the origin
+    /// escape hatch using that same nullifier.
+    function test_unshieldToOrigin_revertsIfNullifierAlreadyUsedByTransact() public {
+        (bytes32 commit,, uint256 netAmount) = _shield(alice, 10 ether, 1, 1);
+
+        bytes32 sharedNullifier = bytes32(uint256(42));
+        CurtainPool.TransactArgs memory args = _emptyTransactArgs();
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
+        args.nullifiers = new bytes32[](2);
+        args.nullifiers[0] = sharedNullifier;
+        args.nullifiers[1] = bytes32(uint256(43));
+        args.newCommits = new bytes32[](2);
+        args.newCommits[0] = bytes32(uint256(44));
+        args.newCommits[1] = bytes32(uint256(45));
+        args.ephemeralPks = new bytes[](2);
+        args.cts = new bytes[](2);
+        pool.transact(args);
+
+        vm.expectRevert(CurtainPool.AlreadyUnshielded.selector);
+        pool.unshieldToOrigin(commit, address(token), netAmount, 1, 1, uint256(sharedNullifier), hex"");
+    }
+
+    /// The other direction of the same regression: a note already
+    /// unshielded via the origin escape hatch must not also be spendable
+    /// via transact() using that same nullifier.
+    function test_transact_revertsIfNullifierAlreadyUsedByUnshieldToOrigin() public {
+        (bytes32 commit,, uint256 netAmount) = _shield(alice, 10 ether, 1, 1);
+
+        bytes32 sharedNullifier = bytes32(uint256(99));
+        pool.unshieldToOrigin(commit, address(token), netAmount, 1, 1, uint256(sharedNullifier), hex"");
+
+        CurtainPool.TransactArgs memory args = _emptyTransactArgs();
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
+        args.nullifiers = new bytes32[](2);
+        args.nullifiers[0] = sharedNullifier;
+        args.nullifiers[1] = bytes32(uint256(100));
+        args.newCommits = new bytes32[](2);
+        args.newCommits[0] = bytes32(uint256(101));
+        args.newCommits[1] = bytes32(uint256(102));
+        args.ephemeralPks = new bytes[](2);
+        args.cts = new bytes[](2);
+
+        vm.expectRevert(CurtainPool.NullifierAlreadyUsed.selector);
+        pool.transact(args);
     }
 
     // ---- transact (mocked verifier — see MockJoinSplitVerifier header) ----

@@ -7,11 +7,13 @@
   "scripts": {
     "ceremony": "bash scripts/ceremony.sh",
     "ceremony:resume": "bash scripts/ceremony-resume.sh",
+    "ceremony:unshield": "bash scripts/ceremony-unshield.sh",
     "gen:poseidon": "node scripts/gen-poseidon-solidity.cjs",
     "export:verifiers": "node scripts/export-verifiers.cjs",
     "prove:joinsplit2x2": "node scripts/prove-joinsplit2x2.cjs",
     "prove:ppoi": "node scripts/prove-ppoi.cjs",
     "prove:solvency": "node scripts/prove-solvency.cjs",
+    "prove:unshield": "node scripts/prove-unshield-fixture.cjs",
     "export:fixture": "node scripts/export-fixture.cjs"
   },
   "devDependencies": {

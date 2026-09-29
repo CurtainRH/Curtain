@@ -35,6 +35,9 @@ circuits/build/**/Verifier.sol
 *.key
 docs/Curtain_Git.md
 
+# Local dev tools (downloaded binaries, not vendored)
+.tools/
+
 # OS / editor
 .DS_Store
 Thumbs.db

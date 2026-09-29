@@ -9,6 +9,7 @@ const targets = [
   { circuit: "joinsplit2x2", className: "JoinSplit2x2Groth16Verifier", outDir: "pool/generated" },
   { circuit: "joinsplit3x3", className: "JoinSplit3x3Groth16Verifier", outDir: "pool/generated" },
   { circuit: "ppoi_dev", className: "PpoiDevGroth16Verifier", outDir: "gate/generated" },
+  { circuit: "unshield", className: "UnshieldGroth16Verifier", outDir: "pool/generated" },
 ];
 
 const baseDir = path.resolve(__dirname, "../../contracts/src");

@@ -11,6 +11,7 @@ import {PoseidonT5Deployer} from "../../src/lib/PoseidonT5.sol";
 import {CurtainPool} from "../../src/pool/CurtainPool.sol";
 import {AssetGate} from "../../src/config/AssetGate.sol";
 import {MockJoinSplitVerifier} from "../mocks/MockJoinSplitVerifier.sol";
+import {MockUnshieldVerifier} from "../mocks/MockUnshieldVerifier.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
 /// @notice Exercises the REAL ScreeningGate wired to a REAL CurtainPool,
@@ -43,9 +44,11 @@ contract ScreeningGateTest is Test {
         assetGate = new AssetGate(address(this));
         MockJoinSplitVerifier v2 = new MockJoinSplitVerifier();
         MockJoinSplitVerifier v3 = new MockJoinSplitVerifier();
+        MockUnshieldVerifier unshieldVerifier = new MockUnshieldVerifier();
 
         pool = new CurtainPool(
-            hasherT3, hasherT5, address(assetGate), address(gate), address(v2), address(v3), address(0x7EA5), FEE_BPS, FEE_BPS
+            hasherT3, hasherT5, address(assetGate), address(gate), address(v2), address(v3),
+            address(unshieldVerifier), address(0x7EA5), FEE_BPS, FEE_BPS
         );
         gate.setPool(address(pool));
 

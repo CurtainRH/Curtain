@@ -7,6 +7,7 @@ import {IPoseidonT3} from "../lib/PoseidonT3.sol";
 import {IPoseidonT5} from "../lib/PoseidonT5.sol";
 import {IncrementalMerkleTree} from "../lib/IncrementalMerkleTree.sol";
 import {IJoinSplitVerifier} from "./IJoinSplitVerifier.sol";
+import {IUnshieldVerifier} from "./IUnshieldVerifier.sol";
 import {AssetGate} from "../config/AssetGate.sol";
 import {IScreeningGate} from "../gate/IScreeningGate.sol";
 
@@ -31,6 +32,21 @@ import {IScreeningGate} from "../gate/IScreeningGate.sol";
 /// are inserted directly, since they inherit clean status from already-
 /// verified (cleared) inputs. `unshieldToOrigin` is unaffected by any of
 /// this — it intentionally works regardless of screening state, by design.
+///
+/// UNSHIELD NULLIFIER UNIFICATION (found while building M5 — see
+/// Curtain_Build.md section 11): unshieldToOrigin used to track spent
+/// notes in its own nullifierUsed[commit] slot, entirely separate from
+/// transact()'s nullifierUsed[Poseidon(ownerSk, leafIndex)] slots for the
+/// exact same notes. A note spent one way could still be spent the other
+/// way too -- a real double-spend, not just a privacy nit. Fixed by
+/// having unshieldToOrigin prove (via the tiny unshield.circom circuit)
+/// that it knows the spending key behind the note and derive the SAME
+/// nullifier a join-split spend of that note would use, keyed by the
+/// note's true leafIndexOf[commit] (recorded once, at shield time, so the
+/// caller can't pick a fresh leafIndex to mint unlimited nullifiers for
+/// one note) -- then mark it in the very same nullifierUsed mapping
+/// transact() uses. Both spend paths now share one nullifier set per
+/// note, so using either one blocks the other.
 contract CurtainPool {
     using SafeERC20 for IERC20;
     using IncrementalMerkleTree for IncrementalMerkleTree.Tree;
@@ -49,6 +65,7 @@ contract CurtainPool {
     IScreeningGate public immutable screeningGate;
     IJoinSplitVerifier public immutable joinSplit2x2Verifier;
     IJoinSplitVerifier public immutable joinSplit3x3Verifier;
+    IUnshieldVerifier public immutable unshieldVerifier;
 
     IncrementalMerkleTree.Tree internal mainTree;
     IncrementalMerkleTree.Tree internal clearedTree;
@@ -57,6 +74,7 @@ contract CurtainPool {
     mapping(bytes32 => uint64) public shieldedAt;
     mapping(bytes32 => bool) public nullifierUsed;
     mapping(bytes32 => bool) public clearedTreeMember;
+    mapping(bytes32 => uint32) public leafIndexOf;
 
     struct TransactArgs {
         bytes proof;
@@ -98,6 +116,7 @@ contract CurtainPool {
         address screeningGateAddr,
         address joinSplit2x2VerifierAddr,
         address joinSplit3x3VerifierAddr,
+        address unshieldVerifierAddr,
         address treasuryAddr,
         uint16 feeBpsShield_,
         uint16 feeBpsUnshield_
@@ -108,6 +127,7 @@ contract CurtainPool {
         screeningGate = IScreeningGate(screeningGateAddr);
         joinSplit2x2Verifier = IJoinSplitVerifier(joinSplit2x2VerifierAddr);
         joinSplit3x3Verifier = IJoinSplitVerifier(joinSplit3x3VerifierAddr);
+        unshieldVerifier = IUnshieldVerifier(unshieldVerifierAddr);
         treasury = treasuryAddr;
         feeBpsShield = feeBpsShield_;
         feeBpsUnshield = feeBpsUnshield_;
@@ -156,6 +176,7 @@ contract CurtainPool {
         leafIndex = mainTree.insert(hasherT3, uint256(commit));
         originOf[commit] = msg.sender;
         shieldedAt[commit] = uint64(block.timestamp);
+        leafIndexOf[commit] = leafIndex;
 
         emit Shield(commit, leafIndex, token, rawAmount);
         emit NoteCiphertext(commit, ephemeralPk, ct);
@@ -226,32 +247,48 @@ contract CurtainPool {
 
     /// @notice Always available — including during standby, after a PPOI
     /// flag, or under any future guardian pause of `shield`/`relay` — and
-    /// only ever pays the EOA recorded at shield time. `proof` need only
-    /// demonstrate knowledge of the note opening (no arity-specific
-    /// join-split proof required, and no ScreeningGate check at all); closes
-    /// Railgun's #140 bug by construction (see Curtain_Overview.md §1, §3).
-    function unshieldToOrigin(bytes32 commit, address token, uint256 netAmount, uint256 ownerPkX, uint256 blinding)
-        external
-    {
+    /// only ever pays the EOA recorded at shield time. No arity-specific
+    /// join-split proof or ScreeningGate check is required; closes Railgun's
+    /// #140 bug by construction (see Curtain_Overview.md §1, §3).
+    ///
+    /// `unshieldProof` is a tiny `unshield.circom` proof (see this file's
+    /// header) that the caller knows the spending key behind `ownerPkX` and
+    /// that `nullifier == Poseidon(ownerSk, leafIndexOf[commit])` — the same
+    /// nullifier a join-split spend of this exact note would produce. This
+    /// is what lets the contract mark the note spent in the very same
+    /// `nullifierUsed` set `transact()` uses, instead of a disjoint one, so
+    /// a note already spent via either path can't be spent via the other.
+    function unshieldToOrigin(
+        bytes32 commit,
+        address token,
+        uint256 netAmount,
+        uint256 ownerPkX,
+        uint256 blinding,
+        uint256 nullifier,
+        bytes calldata unshieldProof
+    ) external {
         address origin = originOf[commit];
         if (origin == address(0)) revert NotOrigin();
-        if (nullifierUsed[commit]) revert AlreadyUnshielded();
+        if (nullifierUsed[bytes32(nullifier)]) revert AlreadyUnshielded();
 
         // `netAmount` is the value actually encoded in the note (post
         // shield-fee) — the caller (the note's owner) knows this because
         // they know their own note's opening. Recomputing the commitment
-        // from it here is what proves the caller is entitled to `commit`
-        // without needing a full join-split ZK proof for this escape hatch.
+        // from it here is what proves the caller is entitled to `commit`.
         uint256 tokenId = tokenIdOf(token);
         uint256 commitField = commitHasher.poseidon([tokenId, netAmount, ownerPkX, blinding]);
         if (bytes32(commitField) != commit) revert InvalidProof();
 
-        // Reuses the nullifier-used map, keyed by the commit itself, purely
-        // to prevent double-unshielding the same note via this path — this
-        // is a distinct namespace from the real join-split nullifiers
-        // (which are Poseidon(ownerSk, leafIndex), never equal to a raw
-        // commitment value in practice).
-        nullifierUsed[commit] = true;
+        // leafIndex comes from the contract's own record (set once, at
+        // shield time), never from the caller — see this function's header
+        // and circuits/unshield.circom's header for why that matters.
+        uint256[] memory unshieldSignals = new uint256[](3);
+        unshieldSignals[0] = ownerPkX;
+        unshieldSignals[1] = leafIndexOf[commit];
+        unshieldSignals[2] = nullifier;
+        if (!unshieldVerifier.verifyProof(unshieldProof, unshieldSignals)) revert InvalidProof();
+
+        nullifierUsed[bytes32(nullifier)] = true;
 
         uint256 fee = (netAmount * feeBpsUnshield) / 10000;
         uint256 payout = netAmount - fee;

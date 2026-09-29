@@ -24,6 +24,7 @@
 | `joinsplit3x3` | 38,986 + 30,297 = 69,283 | 18 | production parameters (depth 32) |
 | `ppoi_dev` | 29,484 + 29,705 = 59,189 | 18 | **dev-scale**: SMT depth 32, not spec's 160 (see `ppoi_dev.circom`) |
 | `solvency_dev` | 72,796 + 76,677 = 149,473 | 18 | **dev-scale**: chunkSize 4, not spec's 4096 (see `solvency.circom`) |
+| `unshield` | 4,182 + 456 = 4,638 | 18 | added while building M5 — see `Curtain_Build.md` §11 item 10 and `circuits/unshield.circom`'s header |
 
 `ppoi_main.circom` (K=3 providers, SMT depth 160 — the actual spec target)
 was compiled and measured at **264,245 total constraints**, which needs a
