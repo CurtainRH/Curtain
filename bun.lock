@@ -1,0 +1,132 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "curtain",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.6.3",
+      },
+    },
+    "apps/web": {
+      "name": "@curtain/web",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "packages/recipes": {
+      "name": "@curtain/recipes",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "packages/sdk": {
+      "name": "@curtain/sdk",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "packages/verifier": {
+      "name": "@curtain/verifier",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/api": {
+      "name": "@curtain/api",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/broadcaster": {
+      "name": "@curtain/broadcaster",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/indexer": {
+      "name": "@curtain/indexer",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/multiplier-view": {
+      "name": "@curtain/multiplier-view",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/ppoi-node": {
+      "name": "@curtain/ppoi-node",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/prover-assist": {
+      "name": "@curtain/prover-assist",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/solvency": {
+      "name": "@curtain/solvency",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+    "services/status": {
+      "name": "@curtain/status",
+      "version": "0.0.1",
+      "devDependencies": {
+        "typescript": "^5.6.3",
+      },
+    },
+  },
+  "packages": {
+    "@curtain/api": ["@curtain/api@workspace:services/api"],
+
+    "@curtain/broadcaster": ["@curtain/broadcaster@workspace:services/broadcaster"],
+
+    "@curtain/indexer": ["@curtain/indexer@workspace:services/indexer"],
+
+    "@curtain/multiplier-view": ["@curtain/multiplier-view@workspace:services/multiplier-view"],
+
+    "@curtain/ppoi-node": ["@curtain/ppoi-node@workspace:services/ppoi-node"],
+
+    "@curtain/prover-assist": ["@curtain/prover-assist@workspace:services/prover-assist"],
+
+    "@curtain/recipes": ["@curtain/recipes@workspace:packages/recipes"],
+
+    "@curtain/sdk": ["@curtain/sdk@workspace:packages/sdk"],
+
+    "@curtain/solvency": ["@curtain/solvency@workspace:services/solvency"],
+
+    "@curtain/status": ["@curtain/status@workspace:services/status"],
+
+    "@curtain/verifier": ["@curtain/verifier@workspace:packages/verifier"],
+
+    "@curtain/web": ["@curtain/web@workspace:apps/web"],
+
+    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+
+    "@types/node": ["@types/node@26.6.3", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg=="],
+
+    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+  }
+}

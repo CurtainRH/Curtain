@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+# NOTE: bun.lock is intentionally committed for reproducible installs
+# (CI runs `bun install --frozen-lockfile`).
+
+# Build output
+dist/
+out/
+*.tsbuildinfo
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/*/31337/
+!contracts/lib/forge-std/
+
+# Circuits (generated artifacts — real ones only committed intentionally in circuits/build/)
+circuits/build/*.r1cs
+circuits/build/*.wasm
+circuits/build/*.zkey
+!circuits/build/*.md
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+docs/Curtain_Git.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage
+coverage/
