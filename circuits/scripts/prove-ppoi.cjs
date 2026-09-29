@@ -17,9 +17,18 @@ async function main() {
 
   const NLEVELS = 32;
 
+  // Provider lists store HASHED addresses — ppoi.circom's SMT check is
+  // against `addrHasher.out = Poseidon(originAddr)`, not the raw address
+  // ("blinded" PPOI: the published list never contains plaintext
+  // addresses). Checking non-membership of the raw address instead of its
+  // hash produces a witness that only accidentally verifies (roughly 50%
+  // of the time per provider, depending on whether the hash's low bits
+  // happen to route down the same tree branch) — caught via
+  // circuits/scripts/debug-smt.cjs while building the M4 ppoi-node e2e
+  // test, which failed consistently with a real 160-bit address.
   async function buildProviderTree(listedAddrs) {
     const smt = await newMemEmptyTrie();
-    for (const addr of listedAddrs) await smt.insert(addr, 1n);
+    for (const addr of listedAddrs) await smt.insert(hash(addr), 1n);
     return smt;
   }
 
@@ -47,7 +56,8 @@ async function main() {
   const originAddr = 0x1234n; // the shielder's address — not on any list
   const originHash = hash(originAddr);
 
-  const witnesses = await Promise.all(providers.map((smt) => nonMembershipWitness(smt, originAddr)));
+  // Search the tree for the HASHED origin, matching what the circuit checks.
+  const witnesses = await Promise.all(providers.map((smt) => nonMembershipWitness(smt, originHash)));
 
   // Note opening this PPOI proof is bound to.
   const tokenId = 999n;
@@ -95,6 +105,7 @@ async function main() {
   console.log(`Proof generated: yes`);
   console.log(`Proof verified:  ${ok}`);
   if (!ok) process.exit(1);
+  process.exit(0); // snarkjs leaves the process alive otherwise — see prove-ppoi-subprocess.cjs's header
 }
 
 main().catch((e) => {

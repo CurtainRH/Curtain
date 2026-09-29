@@ -53,6 +53,7 @@ interface I${name} {
 }
 
 const targets = [
+  { name: "PoseidonT2", nInputs: 1 },
   { name: "PoseidonT3", nInputs: 2 },
   { name: "PoseidonT5", nInputs: 4 },
 ];

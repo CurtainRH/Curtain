@@ -14,6 +14,18 @@ include "node_modules/circomlib/circuits/smt/smtverifier.circom";
 // comparing to this circuit's public `originHash` input (see the
 // "underspecified" note in Curtain_Build.md §11 — this is that glue step,
 // now made concrete: hash the on-chain address before the equality check).
+//
+// PROVIDER LIST FORMAT: each provider's SMT must be keyed by
+// Poseidon(address), not the raw address — `smt[k].key` below is bound to
+// `addrHasher.out`, not `originAddr` directly. Backend §4.2's "newline-
+// delimited lowercase addresses" list format is unaffected (that's the
+// human-readable/transparency format); ppoi-node hashes each address
+// before inserting it into the SMT it builds from that list. Building or
+// checking the SMT with raw (unhashed) addresses produces a witness that
+// only accidentally verifies — found the hard way while building the M4
+// ppoi-node e2e test, where it failed consistently for a real 160-bit
+// address despite "working" for small test values (circuits/scripts/
+// debug-smt.cjs documents the repro).
 template Ppoi(nProviders, nLevels) {
     // ---- public inputs ----
     signal input providerRoots[nProviders];

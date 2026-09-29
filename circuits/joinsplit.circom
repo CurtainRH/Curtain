@@ -16,9 +16,20 @@ include "lib/merkleTree.circom";
 // within governance's allowed range [0.10%, 0.30%] without recompiling the
 // circuit — the contract is responsible for checking feeAmount against the
 // currently governed rate; this circuit only enforces conservation.
+//
+// CLEARED-TREE CHECK (added M4, resolving Curtain_Build.md §11 item 6):
+// each input note must additionally prove membership in `clearedRoot`, a
+// second incremental tree that only contains commitments PPOI has actually
+// cleared (see ScreeningGate.sol). This is what makes "you can only spend
+// notes that passed screening" enforceable *without* the contract ever
+// learning which commitment a nullifier spends — the whole point of a
+// nullifier scheme. Both Merkle proofs (main tree, cleared tree) are
+// zero-knowledge; neither reveals the leaf's position. Same leaf value,
+// independent paths (the two trees have unrelated leaf orderings).
 template JoinSplit(nIns, nOuts, merkleDepth) {
     // ---- public inputs ----
     signal input root;
+    signal input clearedRoot;
     signal input nullifiers[nIns];
     signal input newCommitments[nOuts];
     signal input tokenId;
@@ -34,6 +45,8 @@ template JoinSplit(nIns, nOuts, merkleDepth) {
     signal input inOwnerSk[nIns];
     signal input inPathElements[nIns][merkleDepth];
     signal input inPathIndices[nIns][merkleDepth];
+    signal input inClearedPathElements[nIns][merkleDepth];
+    signal input inClearedPathIndices[nIns][merkleDepth];
 
     // ---- private inputs: new notes ----
     signal input outAmount[nOuts];
@@ -49,6 +62,7 @@ template JoinSplit(nIns, nOuts, merkleDepth) {
     component inPubkey[nIns];
     component inCommitmentHasher[nIns];
     component inMerkle[nIns];
+    component inClearedMerkle[nIns];
     component inNullifierHasher[nIns];
     component inAmountRange[nIns];
 
@@ -70,6 +84,14 @@ template JoinSplit(nIns, nOuts, merkleDepth) {
             inMerkle[i].pathIndices[lvl] <== inPathIndices[i][lvl];
         }
         inMerkle[i].root === root;
+
+        inClearedMerkle[i] = MerkleTreeInclusionProof(merkleDepth);
+        inClearedMerkle[i].leaf <== inCommitmentHasher[i].out;
+        for (var lvl2 = 0; lvl2 < merkleDepth; lvl2++) {
+            inClearedMerkle[i].pathElements[lvl2] <== inClearedPathElements[i][lvl2];
+            inClearedMerkle[i].pathIndices[lvl2] <== inClearedPathIndices[i][lvl2];
+        }
+        inClearedMerkle[i].root === clearedRoot;
 
         inNullifierHasher[i] = Poseidon(2);
         inNullifierHasher[i].inputs[0] <== inOwnerSk[i];

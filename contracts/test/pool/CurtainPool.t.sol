@@ -7,6 +7,7 @@ import {AssetGate} from "../../src/config/AssetGate.sol";
 import {PoseidonT3Deployer} from "../../src/lib/PoseidonT3.sol";
 import {PoseidonT5Deployer, IPoseidonT5} from "../../src/lib/PoseidonT5.sol";
 import {MockJoinSplitVerifier} from "../mocks/MockJoinSplitVerifier.sol";
+import {MockScreeningGate} from "../mocks/MockScreeningGate.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
 contract CurtainPoolTest is Test {
@@ -15,6 +16,7 @@ contract CurtainPoolTest is Test {
 
     CurtainPool internal pool;
     AssetGate internal assetGate;
+    MockScreeningGate internal screeningGate;
     MockJoinSplitVerifier internal verifier2x2;
     MockJoinSplitVerifier internal verifier3x3;
     MockERC20 internal token;
@@ -31,6 +33,7 @@ contract CurtainPoolTest is Test {
         poseidonT5 = IPoseidonT5(PoseidonT5Deployer(hasherT5Addr).hasher());
 
         assetGate = new AssetGate(address(this));
+        screeningGate = new MockScreeningGate();
         verifier2x2 = new MockJoinSplitVerifier();
         verifier3x3 = new MockJoinSplitVerifier();
 
@@ -38,6 +41,7 @@ contract CurtainPoolTest is Test {
             PoseidonT3Deployer(hasherT3).hasher(),
             PoseidonT5Deployer(hasherT5Addr).hasher(),
             address(assetGate),
+            address(screeningGate),
             address(verifier2x2),
             address(verifier3x3),
             treasury,
@@ -100,6 +104,53 @@ contract CurtainPoolTest is Test {
         assertEq(leaf1, 1);
     }
 
+    // ---- markCleared ----
+
+    function test_markCleared_insertsIntoClearedTreeWhenGateSaysSpendable() public {
+        (bytes32 commit,,) = _shield(alice, 10 ether, 1, 1);
+        bytes32 clearedRootBefore = pool.currentClearedRoot();
+
+        screeningGate.setSpendable(true);
+        uint32 clearedLeafIndex = pool.markCleared(commit);
+
+        assertEq(clearedLeafIndex, 0);
+        assertTrue(pool.clearedTreeMember(commit));
+        assertTrue(pool.isKnownClearedRoot(pool.currentClearedRoot()));
+        assertNotEq(uint256(pool.currentClearedRoot()), uint256(clearedRootBefore));
+    }
+
+    function test_markCleared_revertsWhenGateSaysNotSpendable() public {
+        (bytes32 commit,,) = _shield(alice, 10 ether, 1, 1);
+        screeningGate.setSpendable(false);
+
+        vm.expectRevert(CurtainPool.NotSpendable.selector);
+        pool.markCleared(commit);
+    }
+
+    function test_markCleared_revertsForNeverShieldedCommit() public {
+        vm.expectRevert(CurtainPool.NotShielded.selector);
+        pool.markCleared(bytes32(uint256(0xdead)));
+    }
+
+    function test_markCleared_cannotBeCalledTwice() public {
+        (bytes32 commit,,) = _shield(alice, 10 ether, 1, 1);
+        screeningGate.setSpendable(true);
+        pool.markCleared(commit);
+
+        vm.expectRevert(CurtainPool.AlreadyClearedTreeMember.selector);
+        pool.markCleared(commit);
+    }
+
+    function test_markCleared_isPermissionless() public {
+        (bytes32 commit,,) = _shield(alice, 10 ether, 1, 1);
+        screeningGate.setSpendable(true);
+
+        vm.prank(bob); // not alice, not any privileged address
+        pool.markCleared(commit);
+
+        assertTrue(pool.clearedTreeMember(commit));
+    }
+
     // ---- unshieldToOrigin ----
 
     function test_unshieldToOrigin_paysOriginNetOfUnshieldFee() public {
@@ -149,13 +200,35 @@ contract CurtainPoolTest is Test {
         pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
     }
 
+    function test_unshieldToOrigin_worksEvenWhenGateSaysNotSpendable() public {
+        // The whole point of unshieldToOrigin: it bypasses ScreeningGate
+        // entirely, so it works even if a note is flagged/never cleared.
+        (bytes32 commit,, uint256 netAmount) = _shield(alice, 20 ether, 111, 222);
+        screeningGate.setSpendable(false);
+
+        pool.unshieldToOrigin(commit, address(token), netAmount, 111, 222);
+        assertEq(token.balanceOf(address(pool)), 0);
+    }
+
     // ---- transact (mocked verifier — see MockJoinSplitVerifier header) ----
 
     function test_transact_revertsForUnknownRoot() public {
         CurtainPool.TransactArgs memory args = _emptyTransactArgs();
         args.root = bytes32(uint256(0xbad));
+        args.clearedRoot = pool.currentClearedRoot();
 
         vm.expectRevert(CurtainPool.UnknownRoot.selector);
+        pool.transact(args);
+    }
+
+    function test_transact_revertsForUnknownClearedRoot() public {
+        _shield(alice, 10 ether, 1, 1);
+
+        CurtainPool.TransactArgs memory args = _emptyTransactArgs();
+        args.root = pool.currentRoot();
+        args.clearedRoot = bytes32(uint256(0xbad));
+
+        vm.expectRevert(CurtainPool.UnknownClearedRoot.selector);
         pool.transact(args);
     }
 
@@ -163,7 +236,8 @@ contract CurtainPoolTest is Test {
         _shield(alice, 10 ether, 1, 1); // establishes a known root
 
         CurtainPool.TransactArgs memory args = _emptyTransactArgs();
-        args.root = bytes32(pool.currentRoot());
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
         args.nullifiers = new bytes32[](2);
         args.nullifiers[0] = bytes32(uint256(1001));
         args.nullifiers[1] = bytes32(uint256(1002));
@@ -179,11 +253,34 @@ contract CurtainPoolTest is Test {
         assertTrue(pool.nullifierUsed(args.nullifiers[1]));
     }
 
+    function test_transact_outputsAreAutomaticallyClearedTreeMembers() public {
+        _shield(alice, 10 ether, 1, 1);
+
+        CurtainPool.TransactArgs memory args = _emptyTransactArgs();
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
+        args.nullifiers = new bytes32[](2);
+        args.nullifiers[0] = bytes32(uint256(1101));
+        args.nullifiers[1] = bytes32(uint256(1102));
+        args.newCommits = new bytes32[](2);
+        args.newCommits[0] = bytes32(uint256(2101));
+        args.newCommits[1] = bytes32(uint256(2102));
+        args.ephemeralPks = new bytes[](2);
+        args.cts = new bytes[](2);
+
+        pool.transact(args);
+
+        // Outputs inherit cleared status — no markCleared() round trip needed.
+        assertTrue(pool.clearedTreeMember(args.newCommits[0]));
+        assertTrue(pool.clearedTreeMember(args.newCommits[1]));
+    }
+
     function test_transact_revertsOnNullifierReuse() public {
         _shield(alice, 10 ether, 1, 1);
 
         CurtainPool.TransactArgs memory args = _emptyTransactArgs();
-        args.root = bytes32(pool.currentRoot());
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
         args.nullifiers = new bytes32[](2);
         args.nullifiers[0] = bytes32(uint256(3001));
         args.nullifiers[1] = bytes32(uint256(3002));
@@ -206,7 +303,8 @@ contract CurtainPoolTest is Test {
         verifier2x2.setResult(false);
 
         CurtainPool.TransactArgs memory args = _emptyTransactArgs();
-        args.root = bytes32(pool.currentRoot());
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
         args.nullifiers = new bytes32[](2);
         args.nullifiers[0] = bytes32(uint256(6001));
         args.nullifiers[1] = bytes32(uint256(6002));
@@ -224,7 +322,8 @@ contract CurtainPoolTest is Test {
         _shield(alice, 100 ether, 1, 1);
 
         CurtainPool.TransactArgs memory args = _emptyTransactArgs();
-        args.root = bytes32(pool.currentRoot());
+        args.root = pool.currentRoot();
+        args.clearedRoot = pool.currentClearedRoot();
         args.nullifiers = new bytes32[](2);
         args.nullifiers[0] = bytes32(uint256(8001));
         args.nullifiers[1] = bytes32(uint256(8002));
@@ -251,6 +350,7 @@ contract CurtainPoolTest is Test {
         args.newCommits = new bytes32[](0);
         args.ephemeralPks = new bytes[](0);
         args.cts = new bytes[](0);
+        args.clearedRoot = pool.currentClearedRoot();
     }
 
     // ---- immutability ----

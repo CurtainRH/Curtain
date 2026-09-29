@@ -48,3 +48,6 @@ npm-debug.log*
 
 # Test / coverage
 coverage/
+
+# Runtime scratch files (proof-gen subprocess I/O)
+services/ppoi-node/test/.tmp-*.json

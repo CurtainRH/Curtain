@@ -128,6 +128,7 @@ async function main() {
   console.log(`Proof verified:  ${ok}`);
   console.log(`Sum correct:     ${BigInt(publicSignals[0]) === expectedSum}`);
   if (!ok || BigInt(publicSignals[0]) !== expectedSum) process.exit(1);
+  process.exit(0); // snarkjs leaves the process alive otherwise — see prove-ppoi-subprocess.cjs's header
 }
 
 main().catch((e) => {

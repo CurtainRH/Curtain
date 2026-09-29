@@ -8,6 +8,7 @@ import {IPoseidonT5} from "../lib/PoseidonT5.sol";
 import {IncrementalMerkleTree} from "../lib/IncrementalMerkleTree.sol";
 import {IJoinSplitVerifier} from "./IJoinSplitVerifier.sol";
 import {AssetGate} from "../config/AssetGate.sol";
+import {IScreeningGate} from "../gate/IScreeningGate.sol";
 
 /// @notice Curtain's shielded UTXO pool, per Curtain_Build.md §3.1.
 /// Deliberately has NO owner, NO admin functions, and NO upgrade path —
@@ -16,25 +17,23 @@ import {AssetGate} from "../config/AssetGate.sol";
 /// pool version is always a fresh deployment plus user-initiated moves,
 /// never an in-place upgrade.
 ///
-/// KNOWN GAP (flagged, not resolved here — see Curtain_Build.md §11):
-/// the spec describes `transact` as gating on `ScreeningGate.spendable
-/// (commit)` "for every input note's commit (resolved via a leafIndex ->
-/// commit map)". But nullifiers are deliberately unlinkable from the
-/// commitment they spend — that's the entire point of a nullifier scheme.
-/// Revealing which commit a nullifier corresponds to at transact time would
-/// break the anonymity set. Enforcing "only spend notes that cleared PPOI"
-/// therefore almost certainly needs the join-split circuit itself to prove
-/// membership against a *second*, PPOI-filtered root (an ASP-style
-/// association set, which Curtain_Backend.md §2.2 already gestures at:
-/// "Deposit-side ASP (Privacy Pools model) + Railgun-style blinded PPOI;
-/// both") rather than a contract-side lookup after the fact. That is an M4
-/// circuit-and-contract co-design question. This contract does not call
-/// `ScreeningGate.spendable()` from `transact()` because a naive call would
-/// require revealing the input commit (defeating privacy) and a no-op call
-/// would be false security theater. `unshieldToOrigin` is unaffected — it
-/// intentionally works regardless of screening state, by design.
-contract CurtainPool is IncrementalMerkleTree {
+/// GATING (M4 resolution of the M3 KNOWN GAP — see Curtain_Build.md §11 item
+/// 6): the spec's literal `ScreeningGate.spendable(commit)` lookup can't
+/// work inside `transact()` because nullifiers are deliberately unlinkable
+/// from the commitment they spend. Instead, `transact()`'s ZK proof must
+/// prove each input note is included in a *second* tree — `clearedTree` —
+/// which only contains commitments ScreeningGate has actually confirmed
+/// spendable. A Merkle inclusion proof reveals nothing about the leaf's
+/// position, so this enforces "only spend cleared notes" without ever
+/// telling the contract which note is being spent. Shield-time commitments
+/// enter `clearedTree` only via `markCleared()`, once `screeningGate.
+/// spendable(commit)` returns true; `transact()`'s own output commitments
+/// are inserted directly, since they inherit clean status from already-
+/// verified (cleared) inputs. `unshieldToOrigin` is unaffected by any of
+/// this — it intentionally works regardless of screening state, by design.
+contract CurtainPool {
     using SafeERC20 for IERC20;
+    using IncrementalMerkleTree for IncrementalMerkleTree.Tree;
 
     /// BN254 scalar field order — every Poseidon input/output and every
     /// public circuit signal must live in this field.
@@ -44,19 +43,26 @@ contract CurtainPool is IncrementalMerkleTree {
     uint16 public immutable feeBpsUnshield;
     address public immutable treasury;
 
+    IPoseidonT3 public immutable hasherT3;
     IPoseidonT5 public immutable commitHasher;
     AssetGate public immutable assetGate;
+    IScreeningGate public immutable screeningGate;
     IJoinSplitVerifier public immutable joinSplit2x2Verifier;
     IJoinSplitVerifier public immutable joinSplit3x3Verifier;
+
+    IncrementalMerkleTree.Tree internal mainTree;
+    IncrementalMerkleTree.Tree internal clearedTree;
 
     mapping(bytes32 => address) public originOf;
     mapping(bytes32 => uint64) public shieldedAt;
     mapping(bytes32 => bool) public nullifierUsed;
+    mapping(bytes32 => bool) public clearedTreeMember;
 
     struct TransactArgs {
         bytes proof;
         address token;
         bytes32 root;
+        bytes32 clearedRoot;
         bytes32[] nullifiers;
         bytes32[] newCommits;
         address unshieldTo;
@@ -70,38 +76,64 @@ contract CurtainPool is IncrementalMerkleTree {
     event NoteCiphertext(bytes32 indexed commit, bytes ephemeralPk, bytes ct);
     event Transact(bytes32[] nullifiers, bytes32[] newCommits, bytes32 root, address unshieldTo);
     event UnshieldToOrigin(bytes32 indexed commit, address indexed origin, uint256 rawAmount);
+    event MarkedCleared(bytes32 indexed commit, uint32 clearedLeafIndex);
 
     error TokenNotRegistered();
     error UnknownRoot();
+    error UnknownClearedRoot();
     error NullifierAlreadyUsed();
     error InvalidProof();
-    error InvalidExtData();
     error UnsupportedArity();
     error LengthMismatch();
     error NotOrigin();
     error AlreadyUnshielded();
+    error NotShielded();
+    error AlreadyClearedTreeMember();
+    error NotSpendable();
 
     constructor(
-        address hasherT3,
-        address hasherT5,
+        address hasherT3Addr,
+        address hasherT5Addr,
         address assetGateAddr,
+        address screeningGateAddr,
         address joinSplit2x2VerifierAddr,
         address joinSplit3x3VerifierAddr,
         address treasuryAddr,
         uint16 feeBpsShield_,
         uint16 feeBpsUnshield_
-    ) IncrementalMerkleTree(hasherT3) {
-        commitHasher = IPoseidonT5(hasherT5);
+    ) {
+        hasherT3 = IPoseidonT3(hasherT3Addr);
+        commitHasher = IPoseidonT5(hasherT5Addr);
         assetGate = AssetGate(assetGateAddr);
+        screeningGate = IScreeningGate(screeningGateAddr);
         joinSplit2x2Verifier = IJoinSplitVerifier(joinSplit2x2VerifierAddr);
         joinSplit3x3Verifier = IJoinSplitVerifier(joinSplit3x3VerifierAddr);
         treasury = treasuryAddr;
         feeBpsShield = feeBpsShield_;
         feeBpsUnshield = feeBpsUnshield_;
+
+        mainTree.init(hasherT3);
+        clearedTree.init(hasherT3);
     }
 
     function tokenIdOf(address token) public pure returns (uint256) {
         return uint256(keccak256(abi.encodePacked(token))) % FIELD_SIZE;
+    }
+
+    function currentRoot() external view returns (bytes32) {
+        return bytes32(mainTree.currentRoot());
+    }
+
+    function currentClearedRoot() external view returns (bytes32) {
+        return bytes32(clearedTree.currentRoot());
+    }
+
+    function isKnownRoot(bytes32 root) public view returns (bool) {
+        return mainTree.isKnownRoot(uint256(root));
+    }
+
+    function isKnownClearedRoot(bytes32 root) public view returns (bool) {
+        return clearedTree.isKnownRoot(uint256(root));
     }
 
     /// @notice Shields `rawAmount` of `token`. The contract computes the
@@ -121,12 +153,27 @@ contract CurtainPool is IncrementalMerkleTree {
         if (fee > 0) IERC20(token).safeTransfer(treasury, fee);
 
         commit = bytes32(commitHasher.poseidon([tokenIdOf(token), rawAmount - fee, ownerPkX, blinding]));
-        leafIndex = _insert(uint256(commit));
+        leafIndex = mainTree.insert(hasherT3, uint256(commit));
         originOf[commit] = msg.sender;
         shieldedAt[commit] = uint64(block.timestamp);
 
         emit Shield(commit, leafIndex, token, rawAmount);
         emit NoteCiphertext(commit, ephemeralPk, ct);
+    }
+
+    /// @notice Permissionless: inserts a shield-time commitment into
+    /// `clearedTree` once ScreeningGate confirms it's spendable (either
+    /// explicitly PPOI-cleared, or standby has elapsed with no flag).
+    /// Anyone may call this — the security comes from ScreeningGate's own
+    /// verification, not from who submits the transaction.
+    function markCleared(bytes32 commit) external returns (uint32 clearedLeafIndex) {
+        if (shieldedAt[commit] == 0) revert NotShielded();
+        if (clearedTreeMember[commit]) revert AlreadyClearedTreeMember();
+        if (!screeningGate.spendable(commit)) revert NotSpendable();
+
+        clearedTreeMember[commit] = true;
+        clearedLeafIndex = clearedTree.insert(hasherT3, uint256(commit));
+        emit MarkedCleared(commit, clearedLeafIndex);
     }
 
     function transact(TransactArgs calldata a) external {
@@ -140,7 +187,8 @@ contract CurtainPool is IncrementalMerkleTree {
     }
 
     function _transact(TransactArgs calldata a) internal {
-        if (!isKnownRoot(uint256(a.root))) revert UnknownRoot();
+        if (!isKnownRoot(a.root)) revert UnknownRoot();
+        if (!isKnownClearedRoot(a.clearedRoot)) revert UnknownClearedRoot();
         if (a.newCommits.length != a.ephemeralPks.length || a.newCommits.length != a.cts.length) revert LengthMismatch();
 
         for (uint256 i = 0; i < a.nullifiers.length; i++) {
@@ -158,7 +206,11 @@ contract CurtainPool is IncrementalMerkleTree {
             nullifierUsed[a.nullifiers[i]] = true;
         }
         for (uint256 j = 0; j < a.newCommits.length; j++) {
-            _insert(uint256(a.newCommits[j]));
+            mainTree.insert(hasherT3, uint256(a.newCommits[j]));
+            // Outputs inherit cleared status from already-verified inputs —
+            // no separate markCleared() round trip needed for them.
+            clearedTreeMember[a.newCommits[j]] = true;
+            clearedTree.insert(hasherT3, uint256(a.newCommits[j]));
             emit NoteCiphertext(a.newCommits[j], a.ephemeralPks[j], a.cts[j]);
         }
 
@@ -176,8 +228,8 @@ contract CurtainPool is IncrementalMerkleTree {
     /// flag, or under any future guardian pause of `shield`/`relay` — and
     /// only ever pays the EOA recorded at shield time. `proof` need only
     /// demonstrate knowledge of the note opening (no arity-specific
-    /// join-split proof required); closes Railgun's #140 bug by
-    /// construction (see Curtain_Overview.md §1, §3).
+    /// join-split proof required, and no ScreeningGate check at all); closes
+    /// Railgun's #140 bug by construction (see Curtain_Overview.md §1, §3).
     function unshieldToOrigin(bytes32 commit, address token, uint256 netAmount, uint256 ownerPkX, uint256 blinding)
         external
     {
@@ -221,19 +273,20 @@ contract CurtainPool is IncrementalMerkleTree {
     }
 
     /// @dev Order MUST exactly match each joinsplitNxN.circom's
-    /// `component main {public [...]}` declaration: root, nullifiers[],
-    /// newCommitments[], tokenId, unshieldAmount, unshieldTo, feeAmount,
-    /// extDataHash — circom flattens array public inputs in declaration
-    /// order.
+    /// `component main {public [...]}` declaration: root, clearedRoot,
+    /// nullifiers[], newCommitments[], tokenId, unshieldAmount, unshieldTo,
+    /// feeAmount, extDataHash — circom flattens array public inputs in
+    /// declaration order.
     function _buildPublicSignals(TransactArgs calldata a, uint256 tokenId, uint256 extDataHash)
         internal
         pure
         returns (uint256[] memory)
     {
         uint256 n = a.nullifiers.length;
-        uint256[] memory signals = new uint256[](1 + n + n + 5);
+        uint256[] memory signals = new uint256[](2 + n + n + 5);
         uint256 idx = 0;
         signals[idx++] = uint256(a.root);
+        signals[idx++] = uint256(a.clearedRoot);
         for (uint256 i = 0; i < n; i++) signals[idx++] = uint256(a.nullifiers[i]);
         for (uint256 j = 0; j < n; j++) signals[idx++] = uint256(a.newCommits[j]);
         signals[idx++] = tokenId;

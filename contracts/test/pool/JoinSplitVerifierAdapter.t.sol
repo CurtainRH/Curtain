@@ -44,8 +44,8 @@ contract JoinSplitVerifierAdapterTest is Test {
         c[0] = vm.parseJsonUint(json, ".c[0]");
         c[1] = vm.parseJsonUint(json, ".c[1]");
 
-        pubSignals = new uint256[](10);
-        for (uint256 i = 0; i < 10; i++) {
+        pubSignals = new uint256[](11);
+        for (uint256 i = 0; i < 11; i++) {
             pubSignals[i] = vm.parseJsonUint(json, string.concat(".pubSignals[", vm.toString(i), "]"));
         }
     }
@@ -58,7 +58,7 @@ contract JoinSplitVerifierAdapterTest is Test {
 
     function test_tamperedPublicSignal_failsVerification() public view {
         uint256[] memory tampered = pubSignals;
-        tampered[5] = tampered[5] + 1; // corrupt tokenId
+        tampered[6] = tampered[6] + 1; // corrupt tokenId (index 6: root, clearedRoot, 2 nullifiers, 2 newCommitments, tokenId)
 
         bytes memory proof = abi.encode(a, b, c);
         bool ok = adapter.verifyProof(proof, tampered);
@@ -66,11 +66,11 @@ contract JoinSplitVerifierAdapterTest is Test {
     }
 
     function test_wrongSignalCount_reverts() public {
-        uint256[] memory tooFew = new uint256[](9);
-        for (uint256 i = 0; i < 9; i++) tooFew[i] = pubSignals[i];
+        uint256[] memory tooFew = new uint256[](10);
+        for (uint256 i = 0; i < 10; i++) tooFew[i] = pubSignals[i];
 
         bytes memory proof = abi.encode(a, b, c);
-        vm.expectRevert("JoinSplit2x2VerifierAdapter: expected 10 public signals");
+        vm.expectRevert("JoinSplit2x2VerifierAdapter: expected 11 public signals");
         adapter.verifyProof(proof, tooFew);
     }
 }

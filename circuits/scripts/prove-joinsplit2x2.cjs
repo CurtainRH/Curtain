@@ -1,15 +1,18 @@
-// M2 acceptance test: generates a real witness + Groth16 proof for the
+// M2/M4 acceptance test: generates a real witness + Groth16 proof for the
 // joinsplit2x2 circuit, verifies it, and times the wasm proving step
 // against the "<8s desktop" bar in Curtain_Build.md's M2 acceptance row.
 //
-// Builds a tiny depth-32 Poseidon Merkle tree with exactly two real leaves
-// (everything else zero-filled) — enough to produce a genuine inclusion
-// proof without needing the full indexer/service stack M4+ will provide.
+// Builds two independent tiny depth-32 Poseidon Merkle trees — the main
+// deposit tree and the M4 "cleared" tree (see joinsplit.circom's header) —
+// each with the same two commitments at different leaf indices, to
+// demonstrate the two membership proofs are genuinely independent.
 const path = require("path");
 const fs = require("fs");
 const snarkjs = require("snarkjs");
+const { computeZeros, buildSparseTree } = require("./lib/sparseTree.cjs");
 
 const FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const LEVELS = 32;
 
 async function main() {
   const { buildPoseidon, buildBabyjub } = require("circomlibjs");
@@ -24,10 +27,7 @@ async function main() {
     return toField(point[0]);
   };
 
-  // ---- zero hashes for an empty depth-32 tree (matches IncrementalMerkleTree.sol) ----
-  const LEVELS = 32;
-  const zeros = [0n];
-  for (let i = 1; i <= LEVELS; i++) zeros.push(hash(zeros[i - 1], zeros[i - 1]));
+  const zeros = computeZeros(LEVELS, hash);
 
   // ---- two input notes ----
   const tokenId = 12345n;
@@ -39,21 +39,23 @@ async function main() {
   const inCommit = inAmount.map((amt, i) => hash(tokenId, amt, inPkX[i], inBlinding[i]));
   const nullifiers = ownerSk.map((sk, i) => hash(sk, BigInt(i)));
 
-  // leaf0 = inCommit[0] at index 0, leaf1 = inCommit[1] at index 1 — the
-  // rest of the tree is empty, so paths are trivial to construct by hand.
-  const root = hash(hash(inCommit[0], inCommit[1]), ...[]); // placeholder, replaced below
-  let level0Parent = hash(inCommit[0], inCommit[1]);
-  let treeRoot = level0Parent;
-  for (let i = 1; i < LEVELS; i++) treeRoot = hash(treeRoot, zeros[i]);
+  // Main deposit tree: both notes shielded at indices 0 and 1.
+  const mainTree = buildSparseTree(
+    new Map([[0, inCommit[0]], [1, inCommit[1]]]),
+    LEVELS, zeros, hash,
+  );
+  const inPathElements = [mainTree.getPath(0).pathElements, mainTree.getPath(1).pathElements];
+  const inPathIndices = [mainTree.getPath(0).pathIndices, mainTree.getPath(1).pathIndices];
 
-  const inPathElements = [
-    [inCommit[1], ...Array(LEVELS - 1).fill(0).map((_, i) => zeros[i + 1])],
-    [inCommit[0], ...Array(LEVELS - 1).fill(0).map((_, i) => zeros[i + 1])],
-  ];
-  const inPathIndices = [
-    [0, ...Array(LEVELS - 1).fill(0)],
-    [1, ...Array(LEVELS - 1).fill(0)],
-  ];
+  // Cleared tree: same two commitments, but at different indices (3 and 7)
+  // — they cleared PPOI independently of their shield order, alongside
+  // other (irrelevant, zero here) cleared notes.
+  const clearedTree = buildSparseTree(
+    new Map([[3, inCommit[0]], [7, inCommit[1]]]),
+    LEVELS, zeros, hash,
+  );
+  const inClearedPathElements = [clearedTree.getPath(3).pathElements, clearedTree.getPath(7).pathElements];
+  const inClearedPathIndices = [clearedTree.getPath(3).pathIndices, clearedTree.getPath(7).pathIndices];
 
   // ---- two output notes + unshield + fee, conserving value: 60+40 = 70+20+5+5 ----
   const outAmount = [70n, 20n];
@@ -68,7 +70,8 @@ async function main() {
   const extDataHash = (hash(unshieldTo, unshieldAmount, feeAmount)) % FIELD_SIZE;
 
   const input = {
-    root: treeRoot.toString(),
+    root: mainTree.root.toString(),
+    clearedRoot: clearedTree.root.toString(),
     nullifiers: nullifiers.map(String),
     newCommitments: newCommitments.map(String),
     tokenId: tokenId.toString(),
@@ -81,7 +84,9 @@ async function main() {
     inLeafIndex: ["0", "1"],
     inOwnerSk: ownerSk.map(String),
     inPathElements: inPathElements.map((row) => row.map(String)),
-    inPathIndices: inPathIndices,
+    inPathIndices,
+    inClearedPathElements: inClearedPathElements.map((row) => row.map(String)),
+    inClearedPathIndices,
     outAmount: outAmount.map(String),
     outBlinding: outBlinding.map(String),
     outOwnerPkX: outPkX.map(String),
@@ -104,19 +109,21 @@ async function main() {
 
   const solidityCalldata = await snarkjs.groth16.exportSolidityCallData(proof, publicSignals);
 
-  const outDir = path.resolve(__dirname, "../build/joinsplit2x2");
+  const outDir = buildDir;
   fs.writeFileSync(path.join(outDir, "test_input.json"), JSON.stringify(input, null, 2));
   fs.writeFileSync(path.join(outDir, "test_proof.json"), JSON.stringify(proof, null, 2));
   fs.writeFileSync(path.join(outDir, "test_public.json"), JSON.stringify(publicSignals, null, 2));
   fs.writeFileSync(path.join(outDir, "test_calldata.txt"), solidityCalldata);
 
-  console.log("\n=== M2 acceptance summary (joinsplit 2x2) ===");
+  console.log("\n=== M2/M4 acceptance summary (joinsplit 2x2) ===");
   console.log(`Proof generated: yes`);
   console.log(`Proof verified:  ${ok}`);
+  console.log(`Public signals:  ${publicSignals.length} (expect 11: root, clearedRoot, 2 nullifiers, 2 newCommitments, tokenId, unshieldAmount, unshieldTo, feeAmount, extDataHash)`);
   console.log(`Proving time:    ${proveMs.toFixed(0)}ms (target: < 8000ms)`);
-  console.log(`PASS: ${ok && proveMs < 8000}`);
+  console.log(`PASS: ${ok && proveMs < 8000 && publicSignals.length === 11}`);
 
-  if (!ok || proveMs >= 8000) process.exit(1);
+  if (!ok || proveMs >= 8000 || publicSignals.length !== 11) process.exit(1);
+  process.exit(0); // snarkjs leaves the process alive otherwise — see prove-ppoi-subprocess.cjs's header
 }
 
 main().catch((e) => {
