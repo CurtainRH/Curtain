@@ -96,6 +96,7 @@ describe("CurtainWallet: shield -> send -> unshieldToOrigin (M5 acceptance)", ()
       const poolAddr = await deploy(poolArtifact, [
         hasherT3, hasherT5, assetGateAddr, screeningGateAddr,
         joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
+        "0x0000000000000000000000000000000000000000", // no RelayAdapt in this test
         deployer, 20, 20,
       ]);
 

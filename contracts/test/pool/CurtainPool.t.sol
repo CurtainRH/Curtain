@@ -48,6 +48,7 @@ contract CurtainPoolTest is Test {
             address(verifier2x2),
             address(verifier3x3),
             address(unshieldVerifier),
+            address(0), // no RelayAdapt in this suite — reshield() is exercised in test/adapt/RelayAdapt.t.sol
             treasury,
             FEE_BPS,
             FEE_BPS

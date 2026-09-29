@@ -101,6 +101,7 @@ async function main() {
   const poolAddr = await deploy(loadArtifact("CurtainPool"), [
     hasherT3, hasherT5, assetGateAddr, screeningGateAddr,
     joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
+    "0x0000000000000000000000000000000000000000", // no RelayAdapt in this demo
     deployer, 20, 20,
   ]);
   const poolArtifact = loadArtifact("CurtainPool");

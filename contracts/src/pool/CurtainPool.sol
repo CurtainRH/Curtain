@@ -47,6 +47,27 @@ import {IScreeningGate} from "../gate/IScreeningGate.sol";
 /// one note) -- then mark it in the very same nullifierUsed mapping
 /// transact() uses. Both spend paths now share one nullifier set per
 /// note, so using either one blocks the other.
+///
+/// RELAYADAPT / reshield (M6): `reshield()` lets RelayAdapt deposit a
+/// swap's output token straight back into the shielded pool, atomically,
+/// skipping the normal shield fee and standby (the funds already passed
+/// through a fully-proven, already-cleared note in the SAME transaction
+/// via transact()'s ordinary unshield-to-RelayAdapt step -- re-charging a
+/// deposit fee or re-screening would be redundant, not extra safety).
+/// Gating this to RelayAdapt ONLY, without adding a mutable admin setter
+/// (which would break the zero-admin-function invariant this contract is
+/// tested for), needs `relayAdapt` to be immutable and known at THIS
+/// contract's construction time -- but RelayAdapt's own constructor also
+/// needs CurtainPool's address, a genuine two-way dependency. Resolved
+/// with no setter at all: the deployer predicts RelayAdapt's address
+/// before deploying either contract (`vm.computeCreateAddress` /
+/// `getContractAddress`, using the deployer's next-but-one nonce), bakes
+/// that prediction into CurtainPool's constructor, then deploys RelayAdapt
+/// immediately after -- landing it at exactly the predicted address. See
+/// `test/adapt/RelayAdapt.t.sol` for the concrete deployment order this
+/// requires (a real Deploy.s.sol script doing the same, end to end for
+/// every contract, is still an M12 launch-runbook item -- see
+/// Curtain_Build.md section 7 and section 11).
 contract CurtainPool {
     using SafeERC20 for IERC20;
     using IncrementalMerkleTree for IncrementalMerkleTree.Tree;
@@ -66,6 +87,7 @@ contract CurtainPool {
     IJoinSplitVerifier public immutable joinSplit2x2Verifier;
     IJoinSplitVerifier public immutable joinSplit3x3Verifier;
     IUnshieldVerifier public immutable unshieldVerifier;
+    address public immutable relayAdapt;
 
     IncrementalMerkleTree.Tree internal mainTree;
     IncrementalMerkleTree.Tree internal clearedTree;
@@ -108,6 +130,7 @@ contract CurtainPool {
     error NotShielded();
     error AlreadyClearedTreeMember();
     error NotSpendable();
+    error NotRelayAdapt();
 
     constructor(
         address hasherT3Addr,
@@ -117,6 +140,7 @@ contract CurtainPool {
         address joinSplit2x2VerifierAddr,
         address joinSplit3x3VerifierAddr,
         address unshieldVerifierAddr,
+        address relayAdaptAddr,
         address treasuryAddr,
         uint16 feeBpsShield_,
         uint16 feeBpsUnshield_
@@ -128,6 +152,7 @@ contract CurtainPool {
         joinSplit2x2Verifier = IJoinSplitVerifier(joinSplit2x2VerifierAddr);
         joinSplit3x3Verifier = IJoinSplitVerifier(joinSplit3x3VerifierAddr);
         unshieldVerifier = IUnshieldVerifier(unshieldVerifierAddr);
+        relayAdapt = relayAdaptAddr;
         treasury = treasuryAddr;
         feeBpsShield = feeBpsShield_;
         feeBpsUnshield = feeBpsUnshield_;
@@ -195,6 +220,44 @@ contract CurtainPool {
         clearedTreeMember[commit] = true;
         clearedLeafIndex = clearedTree.insert(hasherT3, uint256(commit));
         emit MarkedCleared(commit, clearedLeafIndex);
+    }
+
+    /// @notice RelayAdapt-only: deposits a relay's swap output straight back
+    /// into the shielded pool, atomically, with no shield fee and no
+    /// standby (see this file's header for why that's safe here and not a
+    /// backdoor). `origin` is caller-supplied rather than `msg.sender`
+    /// (which would just be RelayAdapt itself) specifically so
+    /// `unshieldToOrigin` on the reshielded note still pays the ORIGINAL
+    /// depositor, not RelayAdapt — RelayAdapt is trusted to pass through
+    /// the origin of the note it just unshielded via its own `relay()` call
+    /// in the same transaction, never an arbitrary caller-chosen address.
+    function reshield(
+        address token,
+        uint256 rawAmount,
+        uint256 ownerPkX,
+        uint256 blinding,
+        bytes calldata ephemeralPk,
+        bytes calldata ct,
+        address origin
+    ) external returns (bytes32 commit, uint32 leafIndex) {
+        if (msg.sender != relayAdapt) revert NotRelayAdapt();
+
+        IERC20(token).safeTransferFrom(msg.sender, address(this), rawAmount);
+
+        commit = bytes32(commitHasher.poseidon([tokenIdOf(token), rawAmount, ownerPkX, blinding]));
+        leafIndex = mainTree.insert(hasherT3, uint256(commit));
+        originOf[commit] = origin;
+        shieldedAt[commit] = uint64(block.timestamp);
+        leafIndexOf[commit] = leafIndex;
+
+        // Skips standby entirely — inherits cleared status the same way
+        // transact()'s own outputs do, since the value backing this note
+        // was already proven cleared as an input earlier in this very tx.
+        clearedTreeMember[commit] = true;
+        clearedTree.insert(hasherT3, uint256(commit));
+
+        emit Shield(commit, leafIndex, token, rawAmount);
+        emit NoteCiphertext(commit, ephemeralPk, ct);
     }
 
     function transact(TransactArgs calldata a) external {
