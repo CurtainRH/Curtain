@@ -112,6 +112,9 @@
     "services/solvency": {
       "name": "@curtain/solvency",
       "version": "0.0.1",
+      "dependencies": {
+        "@curtain/verifier": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "^5.6.3",
       },

@@ -1,9 +1,11 @@
 /**
- * @curtain/verifier — Receipt and solvency proof verification library
- * Milestone: M0 scaffold. Implementation lands in later milestones per Curtain_Build.md.
+ * @curtain/verifier — Receipt, disclosure, and solvency proof verification library
  */
 export const name = "verifier" as const;
 
 export function ready(): boolean {
   return true;
 }
+
+export * from "./solvency-verifier";
+export * from "./disclosure-verifier";

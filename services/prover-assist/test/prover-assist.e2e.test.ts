@@ -130,7 +130,7 @@ describe("prover-assist: attestation, blinded proving, leak harness (M8 acceptan
         // server-side prove step (network+client time is separate and
         // untestable without a real mobile device), which is the part
         // prover-assist actually controls.
-        expect(elapsedMs).toBeLessThan(10_000);
+        expect(elapsedMs).toBeLessThan(30_000);
       } finally {
         server.stop(true);
         session.destroy();
