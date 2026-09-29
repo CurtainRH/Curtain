@@ -16,3 +16,4 @@ export * from "./tree";
 export * from "./prover";
 export * from "./pool-client";
 export * from "./disclosure";
+export * from "./staking";
