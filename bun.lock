@@ -98,7 +98,14 @@
     "services/prover-assist": {
       "name": "@curtain/prover-assist",
       "version": "0.0.1",
+      "dependencies": {
+        "@noble/ciphers": "^1.3.0",
+        "@noble/curves": "^2.4.0",
+        "@noble/hashes": "^1.8.0",
+        "snarkjs": "^0.7.5",
+      },
       "devDependencies": {
+        "circomlibjs": "^0.1.7",
         "typescript": "^5.6.3",
       },
     },

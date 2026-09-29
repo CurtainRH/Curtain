@@ -228,6 +228,13 @@ describe("broadcaster: assignment, censorship fallback, slash (M7 acceptance)", 
       const remainingBondedSet = (await publicClient.readContract({ address: bondAddr, abi: bondAbi, functionName: "bondedBroadcasters" })) as Address[];
       expect(remainingBondedSet.map((a) => a.toLowerCase())).not.toContain(assignee.toLowerCase());
     },
-    60_000,
+    // This test runs ~20 sequential on-chain transactions (bonding 3
+    // broadcasters, minting, submitting, setting attestors, slashing) —
+    // normally ~45-50s total, uncomfortably close to a 60s bound. Found by
+    // instrumenting the test after it started intermittently timing out at
+    // exactly 60_000ms with no error: it wasn't hung, just slow, and any
+    // small system load variance tipped it over the edge. See
+    // Curtain_Build.md §11.
+    120_000,
   );
 });
