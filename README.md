@@ -56,12 +56,12 @@ cd contracts && forge test   # contracts
 | M1 | Stealth v0 | ✅ done |
 | M2 | Circuits | ✅ done |
 | M3 | Pool | ✅ done |
-| M4 | Gate + PPOI | pending |
-| M5 | Wallet SDK + web | pending |
-| M6 | RelayAdapt + recipes v1 | pending |
-| M7 | Broadcasters | pending |
-| M8 | prover-assist | pending |
-| M9 | Morpho / Arcus / Prism recipes | pending |
+| M4 | Gate + PPOI | ✅ done |
+| M5 | Wallet SDK + web | ✅ done |
+| M6 | RelayAdapt + recipes v1 | ✅ done |
+| M7 | Broadcasters | ✅ done |
+| M8 | prover-assist | ✅ done |
+| M9 | Morpho / Arcus / Prism recipes | ✅ done |
 | M10 | Disclosure + Solvency | pending |
 | M11 | Staking + fees | pending |
 | M12 | Mainnet | pending |
