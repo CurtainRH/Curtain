@@ -43,6 +43,7 @@ contract CrtnStaking is ReentrancyGuard {
     mapping(address => bool) public isFeeToken;
     mapping(address => uint256) public accFeePerShare; // scaled by 1e18
     mapping(address => mapping(address => uint256)) public rewardDebt; // user => token => debt
+    mapping(address => uint256) public lastKnownBalance; // token => balance as of the last syncFees() call
 
     // Governance parameters
     uint64 public constant VOTING_PERIOD = 3 days;
@@ -99,6 +100,7 @@ contract CrtnStaking is ReentrancyGuard {
 
     error ZeroAmount();
     error ZeroAddress();
+    error CannotSyncStakedToken();
     error InsufficientStake();
     error FeeBpsOutOfBounds();
     error InsufficientStakeToPropose();
@@ -154,12 +156,45 @@ contract CrtnStaking is ReentrancyGuard {
     }
 
     /// @notice Receive pool shield/unshield fees and split 60% stakers / 40% treasury.
+    /// Pull-based: caller must have approved this contract for `amount` first.
     function receiveFees(address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         if (token == address(0)) revert ZeroAddress();
 
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        _distributeFees(token, amount);
+    }
 
+    /// @notice Push-based fee sync: CurtainPool.sol's `treasury` is set to this contract's
+    /// address (see Curtain_Build.md §11 for why), so pool fees arrive here as a plain
+    /// `safeTransfer` with no call and no approval — CurtainPool is deliberately immutable
+    /// and must never be made to know about CrtnStaking's existence or call its functions.
+    /// `syncFees` is the permissionless other half: anyone may call it (same pattern as
+    /// CurtainPool.markCleared()) to detect the balance increase since the last sync and
+    /// distribute it 60/40, same math as `receiveFees`.
+    ///
+    /// Guarded against `token == crtnToken`: this contract's own CRTN balance also holds
+    /// every staker's staked principal (from `stake()`), which must never be counted as
+    /// "fees" and redistributed — CRTN itself is never a pool fee token in practice, but the
+    /// guard exists so a malicious or mistaken call can't drain staked principal into the
+    /// reward-accounting system.
+    function syncFees(address token) external nonReentrant {
+        if (token == address(crtnToken)) revert CannotSyncStakedToken();
+
+        uint256 newFees = IERC20(token).balanceOf(address(this)) - lastKnownBalance[token];
+        if (newFees == 0) return;
+
+        _distributeFees(token, newFees);
+    }
+
+    /// @dev Distributes `amount` of `token` 60/40 and, for every token this contract can ever
+    /// hold a balance of other than staked CRTN, re-snapshots `lastKnownBalance` from the
+    /// ACTUAL post-distribution balance (not `amount` or the pre-distribution balance) — the
+    /// staker-share portion stays physically in the contract (owed but unclaimed), so the
+    /// true remaining balance is `oldBalance - treasuryShare`, not zero and not `oldBalance`.
+    /// Snapshotting the real balance keeps `receiveFees` and `syncFees` consistent with each
+    /// other regardless of which path a given token's fees arrive through.
+    function _distributeFees(address token, uint256 amount) internal {
         uint256 treasuryShare = (amount * 40) / 100;
         uint256 stakerShare = amount - treasuryShare;
 
@@ -178,6 +213,10 @@ contract CrtnStaking is ReentrancyGuard {
                 }
                 accFeePerShare[token] += (stakerShare * 1e18) / totalStaked;
             }
+        }
+
+        if (token != address(crtnToken)) {
+            lastKnownBalance[token] = IERC20(token).balanceOf(address(this));
         }
 
         emit FeesReceived(token, amount, stakerShare, treasuryShare);
@@ -199,6 +238,10 @@ contract CrtnStaking is ReentrancyGuard {
         rewardDebt[msg.sender][token] = (stakedBalance[msg.sender] * accFeePerShare[token]) / 1e18;
         if (pending > 0) {
             IERC20(token).safeTransfer(msg.sender, pending);
+            // Every outbound transfer of a fee token must keep lastKnownBalance in sync, or
+            // syncFees()'s next balance-delta computation underflows — see _distributeFees's
+            // header for the same invariant on the inbound side.
+            lastKnownBalance[token] -= pending;
             emit FeesClaimed(msg.sender, token, pending);
         }
     }
@@ -217,6 +260,7 @@ contract CrtnStaking is ReentrancyGuard {
             if (pending > 0) {
                 rewardDebt[staker][token] = (stakedBalance[staker] * accFeePerShare[token]) / 1e18;
                 IERC20(token).safeTransfer(staker, pending);
+                lastKnownBalance[token] -= pending; // keep syncFees()'s balance-delta accounting correct — see claimFees()
                 emit FeesClaimed(staker, token, pending);
             }
         }
