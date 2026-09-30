@@ -33,6 +33,16 @@ import {CurtainPool} from "../pool/CurtainPool.sol";
 ///    their own gas directly for now; extending this once M7 lands is a
 ///    signature addition, not a redesign.
 ///
+/// PROOF BINDING (post-audit fix): the join-split proof's `extDataHash` covers
+/// `unshield.extData`, and `relay()` requires `unshield.extData == relayDataHash(calls,
+/// outputs, origin)`. Before this, a front-runner or the broadcaster could resend a user's
+/// proof with their own calls (e.g. `usdg.transfer(attacker, amount)`) and take the funds —
+/// see test/adapt/RelayFrontRun.t.sol. The broadcaster's fee is now paid by the pool from
+/// the proved `feeAmount` to `unshield.feeRecipient`, so deviation 2 above no longer applies.
+///
+/// Approvals made by `approve` calls are reset to zero after the calls run, and the relay
+/// reverts if this contract is left holding any ETH (Curtain_Build.md §3.3, §10).
+///
 /// RESHIELD GATING: see CurtainPool.sol's header for why `relayAdapt` is an
 /// immutable set via predicted-address deployment ordering rather than a
 /// mutable setter.
@@ -41,6 +51,10 @@ import {CurtainPool} from "../pool/CurtainPool.sol";
 /// the deploy runbook §7 step 9 and §3.9, same pattern as AssetGate) —
 /// RelayAdapt makes no claim to being admin-free the way CurtainPool does;
 /// spec explicitly calls targets "timelock-managed".
+interface IGuardianView {
+    function relayPaused() external view returns (bool);
+}
+
 contract RelayAdapt is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -72,6 +86,9 @@ contract RelayAdapt is Ownable, ReentrancyGuard {
     error InsufficientOutput(address token, uint256 balance, uint256 minOut);
     error UnshieldMustTargetThis();
     error Residue(address token, uint256 balance);
+    error RelayDataMismatch();
+    error RelayPausedByGuardian();
+    error EthResidue(uint256 balance);
 
     constructor(address poolAddr, address initialOwner) Ownable(initialOwner) {
         pool = CurtainPool(poolAddr);
@@ -80,6 +97,16 @@ contract RelayAdapt is Ownable, ReentrancyGuard {
     function setAllowedTarget(address target, bool allowed) external onlyOwner {
         allowedTarget[target] = allowed;
         emit TargetAllowed(target, allowed);
+    }
+
+    /// @notice The value a relay proof must put in `unshield.extData`. Binds the exact calls,
+    /// reshield outputs (owners included) and origin, plus this contract and chain.
+    function relayDataHash(Call[] calldata calls, ReshieldOutput[] calldata outputs, address origin)
+        public
+        view
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(block.chainid, address(this), calls, outputs, origin));
     }
 
     /// @notice Unshields via `unshield` (must set `unshieldTo = address(this)`),
@@ -97,6 +124,9 @@ contract RelayAdapt is Ownable, ReentrancyGuard {
         address origin
     ) external nonReentrant {
         if (unshield.unshieldTo != address(this)) revert UnshieldMustTargetThis();
+        if (unshield.extData != relayDataHash(calls, outputs, origin)) revert RelayDataMismatch();
+        IGuardianView g = IGuardianView(address(pool.guardian()));
+        if (address(g) != address(0) && g.relayPaused()) revert RelayPausedByGuardian();
 
         pool.transact(unshield);
 
@@ -105,6 +135,7 @@ contract RelayAdapt is Ownable, ReentrancyGuard {
             (bool ok,) = calls[i].to.call{value: calls[i].value}(calls[i].data);
             if (!ok) revert CallFailed(i);
         }
+        _resetApprovals(calls);
 
         if (unshield.unshieldAmount > 0) {
             uint256 inputResidue = IERC20(unshield.token).balanceOf(address(this));
@@ -123,6 +154,19 @@ contract RelayAdapt is Ownable, ReentrancyGuard {
             if (residue > 0) revert Residue(o.token, residue);
         }
 
+        if (address(this).balance > 0) revert EthResidue(address(this).balance);
+
         emit Relayed(msg.sender, origin, calls.length, outputs.length);
+    }
+
+    /// @dev Zeroes every allowance an `approve(spender, amount)` call in `calls` granted, so no
+    /// approval outlives the relay that needed it.
+    function _resetApprovals(Call[] calldata calls) internal {
+        for (uint256 i = 0; i < calls.length; i++) {
+            bytes calldata data = calls[i].data;
+            if (data.length < 68 || bytes4(data[:4]) != IERC20.approve.selector) continue;
+            (address spender,) = abi.decode(data[4:], (address, uint256));
+            IERC20(calls[i].to).forceApprove(spender, 0);
+        }
     }
 }

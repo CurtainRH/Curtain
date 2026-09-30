@@ -59,9 +59,10 @@ contract CurtainPoolMetaTxTest is Test {
             address(unshieldVer),
             address(0),
             treasury,
+            address(0) /* feeSource */,
             FEE_BPS,
-            FEE_BPS,
-            address(forwarder)
+            address(forwarder),
+            address(0) /* guardian */
         );
 
         token.mint(alice, 1_000 ether);

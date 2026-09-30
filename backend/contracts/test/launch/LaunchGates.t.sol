@@ -72,9 +72,10 @@ contract LaunchGatesTest is Test {
             unshieldVerifier,
             predictedRelayAdapt,
             treasury,
+            address(0) /* feeSource */,
             20,
-            20,
-            address(0)
+            address(0),
+            address(0) /* guardian */
         );
 
         adapt = new RelayAdapt(address(pool), address(this));
@@ -175,7 +176,7 @@ contract LaunchGatesTest is Test {
 
         // No providers configured => degraded 60-minute standby; warp past it so
         // ScreeningGate.spendable() flips true and markCleared() will accept the commit.
-        vm.warp(block.timestamp + gate.STANDBY_DEGRADED_SECONDS() + 1);
+        vm.warp(vm.getBlockTimestamp() + gate.STANDBY_DEGRADED_SECONDS() + 1);
         assertTrue(gate.spendable(commit));
         pool.markCleared(commit);
 

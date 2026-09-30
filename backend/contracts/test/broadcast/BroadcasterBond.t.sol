@@ -124,7 +124,7 @@ contract BroadcasterBondTest is Test {
         vm.startPrank(alice);
         bond_.bond(MIN_BOND);
         bond_.requestUnbond();
-        vm.warp(block.timestamp + 14 days);
+        vm.warp(vm.getBlockTimestamp() + 14 days);
         uint256 balBefore = token.balanceOf(alice);
         bond_.unbond();
         vm.stopPrank();

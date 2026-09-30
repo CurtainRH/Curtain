@@ -14,6 +14,12 @@ interface IRelayAdaptGov {
     function setAllowedTarget(address target, bool allowed) external;
 }
 
+interface ITimelock {
+    function getMinDelay() external view returns (uint256);
+    function schedule(address target, uint256 value, bytes calldata data, bytes32 predecessor, bytes32 salt, uint256 delay)
+        external;
+}
+
 /// @notice $CRTN Staking, Fee Router, and Governance parameter voting contract,
 /// per Curtain_Build.md §3.9 & §2.7.
 ///
@@ -29,6 +35,15 @@ interface IRelayAdaptGov {
 ///   2. Allowed RelayAdapt execution targets
 ///   3. Protocol fee BPS within bounds [10, 30] (0.10% - 0.30%)
 /// - Note logic remains strictly immutable and untouched.
+///
+/// GOVERNANCE SAFETY (post-audit fixes):
+/// - Voting locks the voter's stake until the proposal's voting ends, so the same $CRTN can't
+///   vote, unstake, move to another wallet and vote again (and flash loans can't vote).
+/// - A proposal needs `for > against` AND `for >= QUORUM_BPS` of the stake at creation.
+/// - Once `timelock` is set (Deploy.s.sol does it), a passed proposal is only *scheduled* on the
+///   24h TimelockController that owns ScreeningGate/RelayAdapt; the 2-of-3 multisig holds the
+///   canceller role there and can veto. Fee changes go through the same path (`setFeeBps`).
+/// - `currentFeeBps` is what CurtainPool reads as its fee (IFeeSource), clamped there too.
 contract CrtnStaking is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -51,7 +66,13 @@ contract CrtnStaking is ReentrancyGuard {
     uint16 public constant MIN_FEE_BPS = 10; // 0.10%
     uint16 public constant MAX_FEE_BPS = 30; // 0.30%
 
+    uint16 public constant QUORUM_BPS = 400; // 4% of stake at proposal creation must vote for
+
     uint16 public currentFeeBps = 20; // Default 0.20%
+
+    address public immutable deployer;
+    ITimelock public timelock;
+    mapping(address => uint64) public voteLockUntil;
 
     enum ProposalType {
         SetFeeBps,
@@ -82,6 +103,7 @@ contract CrtnStaking is ReentrancyGuard {
         uint256 againstVotes;
         bool executed;
         bool canceled;
+        uint256 quorumVotes;
     }
 
     uint256 public proposalCount;
@@ -97,6 +119,8 @@ contract CrtnStaking is ReentrancyGuard {
     event VoteCast(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight);
     event ProposalExecuted(uint256 indexed proposalId);
     event FeeBpsUpdated(uint16 newFeeBps);
+    event TimelockSet(address timelock);
+    event ProposalQueued(uint256 indexed proposalId, address target, bytes data);
 
     error ZeroAmount();
     error ZeroAddress();
@@ -110,11 +134,37 @@ contract CrtnStaking is ReentrancyGuard {
     error ProposalNotEnded();
     error ProposalAlreadyExecuted();
     error ProposalFailed();
+    error StakeLocked(uint64 until);
+    error QuorumNotReached(uint256 forVotes, uint256 quorumVotes);
+    error NotDeployer();
+    error TimelockAlreadySet();
+    error NotTimelock();
 
     constructor(address crtnTokenAddr, address treasuryAddr) {
         if (crtnTokenAddr == address(0) || treasuryAddr == address(0)) revert ZeroAddress();
         crtnToken = IERC20(crtnTokenAddr);
         treasury = treasuryAddr;
+        deployer = msg.sender;
+    }
+
+    /// @notice One-time wiring of the TimelockController that owns the governed contracts.
+    /// Staking must exist before the timelock (it is one of the timelock's proposers), hence
+    /// a setter instead of a constructor argument.
+    function setTimelock(address timelockAddr) external {
+        if (msg.sender != deployer) revert NotDeployer();
+        if (address(timelock) != address(0)) revert TimelockAlreadySet();
+        if (timelockAddr == address(0)) revert ZeroAddress();
+        timelock = ITimelock(timelockAddr);
+        emit TimelockSet(timelockAddr);
+    }
+
+    /// @notice Applies a fee change that passed a vote. Only callable by the timelock, after
+    /// its delay. Bounds re-checked here.
+    function setFeeBps(uint16 feeBps) external {
+        if (msg.sender != address(timelock)) revert NotTimelock();
+        if (feeBps < MIN_FEE_BPS || feeBps > MAX_FEE_BPS) revert FeeBpsOutOfBounds();
+        currentFeeBps = feeBps;
+        emit FeeBpsUpdated(feeBps);
     }
 
     // --- STAKING & FEE HARVESTING ---
@@ -142,6 +192,7 @@ contract CrtnStaking is ReentrancyGuard {
     function unstake(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         if (stakedBalance[msg.sender] < amount) revert InsufficientStake();
+        if (block.timestamp <= voteLockUntil[msg.sender]) revert StakeLocked(voteLockUntil[msg.sender]);
 
         _claimAllPending(msg.sender);
 
@@ -314,6 +365,7 @@ contract CrtnStaking is ReentrancyGuard {
         p.proposedFeeBps = feeBps;
         p.startTime = uint64(block.timestamp);
         p.endTime = uint64(block.timestamp + VOTING_PERIOD);
+        p.quorumVotes = (totalStaked * QUORUM_BPS) / 10000;
 
         emit ProposalCreated(proposalId, msg.sender, ProposalType.SetFeeBps);
     }
@@ -342,6 +394,7 @@ contract CrtnStaking is ReentrancyGuard {
         });
         p.startTime = uint64(block.timestamp);
         p.endTime = uint64(block.timestamp + VOTING_PERIOD);
+        p.quorumVotes = (totalStaked * QUORUM_BPS) / 10000;
 
         emit ProposalCreated(proposalId, msg.sender, ProposalType.AddProvider);
     }
@@ -362,6 +415,7 @@ contract CrtnStaking is ReentrancyGuard {
         p.provider.providerId = providerId;
         p.startTime = uint64(block.timestamp);
         p.endTime = uint64(block.timestamp + VOTING_PERIOD);
+        p.quorumVotes = (totalStaked * QUORUM_BPS) / 10000;
 
         emit ProposalCreated(proposalId, msg.sender, ProposalType.RemoveProvider);
     }
@@ -384,6 +438,7 @@ contract CrtnStaking is ReentrancyGuard {
         p.relayTarget = target;
         p.startTime = uint64(block.timestamp);
         p.endTime = uint64(block.timestamp + VOTING_PERIOD);
+        p.quorumVotes = (totalStaked * QUORUM_BPS) / 10000;
 
         emit ProposalCreated(proposalId, msg.sender, pType);
     }
@@ -399,6 +454,7 @@ contract CrtnStaking is ReentrancyGuard {
         if (weight == 0) revert NoVotingPower();
 
         hasVoted[proposalId][msg.sender] = true;
+        if (p.endTime > voteLockUntil[msg.sender]) voteLockUntil[msg.sender] = p.endTime;
         if (support) {
             p.forVotes += weight;
         } else {
@@ -414,9 +470,18 @@ contract CrtnStaking is ReentrancyGuard {
         if (block.timestamp <= p.endTime) revert ProposalNotEnded();
         if (p.executed) revert ProposalAlreadyExecuted();
         if (p.forVotes <= p.againstVotes) revert ProposalFailed();
+        if (p.forVotes < p.quorumVotes || p.forVotes == 0) revert QuorumNotReached(p.forVotes, p.quorumVotes);
 
         p.executed = true;
 
+        if (address(timelock) != address(0)) {
+            (address target, bytes memory data) = _proposalCall(p);
+            timelock.schedule(target, 0, data, bytes32(0), bytes32(proposalId), timelock.getMinDelay());
+            emit ProposalQueued(proposalId, target, data);
+            return;
+        }
+
+        // No timelock wired (local dev/tests only): apply directly.
         if (p.pType == ProposalType.SetFeeBps) {
             currentFeeBps = p.proposedFeeBps;
             emit FeeBpsUpdated(p.proposedFeeBps);
@@ -436,5 +501,24 @@ contract CrtnStaking is ReentrancyGuard {
         }
 
         emit ProposalExecuted(proposalId);
+    }
+
+    function _proposalCall(Proposal storage p) internal view returns (address target, bytes memory data) {
+        if (p.pType == ProposalType.SetFeeBps) {
+            return (address(this), abi.encodeCall(this.setFeeBps, (p.proposedFeeBps)));
+        } else if (p.pType == ProposalType.AddProvider) {
+            return (
+                p.targetContract,
+                abi.encodeCall(
+                    IScreeningGateGov.addProvider,
+                    (p.provider.providerId, p.provider.publisher, p.provider.listRoot, p.provider.flagRoot)
+                )
+            );
+        } else if (p.pType == ProposalType.RemoveProvider) {
+            return (p.targetContract, abi.encodeCall(IScreeningGateGov.removeProvider, (p.provider.providerId)));
+        } else if (p.pType == ProposalType.AddRelayTarget) {
+            return (p.targetContract, abi.encodeCall(IRelayAdaptGov.setAllowedTarget, (p.relayTarget, true)));
+        }
+        return (p.targetContract, abi.encodeCall(IRelayAdaptGov.setAllowedTarget, (p.relayTarget, false)));
     }
 }

@@ -67,9 +67,10 @@ contract RelayAdaptM9Test is Test {
             address(unshieldVer),
             predictedAdapt,
             treasury,
+            address(0) /* feeSource */,
             FEE_BPS,
-            FEE_BPS,
-            address(0)
+            address(0),
+            address(0) /* guardian */
         );
 
         adapt = new RelayAdapt(address(pool), address(this));
@@ -106,6 +107,7 @@ contract RelayAdaptM9Test is Test {
         vm.prank(alice);
         pool.shield(address(usdg), depositRaw, ALICE_PK_X, 111, "", "");
         uint256 netShielded = depositRaw - (depositRaw * FEE_BPS) / 10000;
+        netShielded = _unshieldable(netShielded); // leave room for the enforced unshield fee
 
         // 2. Relay: unshield USDG -> deposit into MorphoVault -> reshield mvUSDG
         CurtainPool.TransactArgs memory unshieldArgs = CurtainPool.TransactArgs({
@@ -119,7 +121,9 @@ contract RelayAdaptM9Test is Test {
             cts: new bytes[](2),
             unshieldTo: address(adapt),
             unshieldAmount: netShielded,
-            feeAmount: 0
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](2);
@@ -144,6 +148,7 @@ contract RelayAdaptM9Test is Test {
             minOut: netShielded // 1:1 initial rate
         });
 
+        _bind(unshieldArgs, calls, outputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldArgs, calls, outputs, alice);
 
@@ -154,7 +159,7 @@ contract RelayAdaptM9Test is Test {
         // 3. Simulate NAV yield accrual: Morpho Vault rate goes from 1.0 to 1.1
         morphoVault.setRate(1.1e18);
 
-        uint256 vaultShares = outputs[0].minOut;
+        uint256 vaultShares = _unshieldable(outputs[0].minOut);
         uint256 accruedAssets = morphoVault.convertToAssets(vaultShares);
         assertGt(accruedAssets, netShielded);
 
@@ -170,7 +175,9 @@ contract RelayAdaptM9Test is Test {
             cts: new bytes[](2),
             unshieldTo: address(adapt),
             unshieldAmount: vaultShares,
-            feeAmount: 0
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory redeemCalls = new RelayAdapt.Call[](1);
@@ -190,6 +197,7 @@ contract RelayAdaptM9Test is Test {
             minOut: accruedAssets
         });
 
+        _bind(unshieldVaultArgs, redeemCalls, redeemOutputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldVaultArgs, redeemCalls, redeemOutputs, alice);
 
@@ -203,6 +211,7 @@ contract RelayAdaptM9Test is Test {
         vm.prank(alice);
         pool.shield(address(usdg), depositRaw, ALICE_PK_X, 111, "", "");
         uint256 netShielded = depositRaw - (depositRaw * FEE_BPS) / 10000;
+        netShielded = _unshieldable(netShielded); // leave room for the enforced unshield fee
 
         CurtainPool.TransactArgs memory unshieldArgs = CurtainPool.TransactArgs({
             proof: "",
@@ -215,7 +224,9 @@ contract RelayAdaptM9Test is Test {
             cts: new bytes[](2),
             unshieldTo: address(adapt),
             unshieldAmount: netShielded,
-            feeAmount: 0
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](2);
@@ -240,11 +251,14 @@ contract RelayAdaptM9Test is Test {
             minOut: netShielded
         });
 
+        _bind(unshieldArgs, calls, outputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldArgs, calls, outputs, alice);
 
         assertEq(usdg.balanceOf(address(adapt)), 0);
         assertEq(arcusPosToken.balanceOf(address(adapt)), 0);
+
+        uint256 posAmt = _unshieldable(netShielded);
 
         CurtainPool.TransactArgs memory unshieldPosArgs = CurtainPool.TransactArgs({
             proof: "",
@@ -256,20 +270,22 @@ contract RelayAdaptM9Test is Test {
             ephemeralPks: new bytes[](2),
             cts: new bytes[](2),
             unshieldTo: address(adapt),
-            unshieldAmount: netShielded,
-            feeAmount: 0
+            unshieldAmount: posAmt,
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory closeCalls = new RelayAdapt.Call[](2);
         closeCalls[0] = RelayAdapt.Call({
             to: address(arcusPosToken),
             value: 0,
-            data: abi.encodeWithSignature("approve(address,uint256)", address(arcusRouter), netShielded)
+            data: abi.encodeWithSignature("approve(address,uint256)", address(arcusRouter), posAmt)
         });
         closeCalls[1] = RelayAdapt.Call({
             to: address(arcusRouter),
             value: 0,
-            data: abi.encodeWithSignature("closePosition(address,uint256,address,uint256)", address(arcusPosToken), netShielded, address(usdg), netShielded)
+            data: abi.encodeWithSignature("closePosition(address,uint256,address,uint256)", address(arcusPosToken), posAmt, address(usdg), posAmt)
         });
 
         RelayAdapt.ReshieldOutput[] memory closeOutputs = new RelayAdapt.ReshieldOutput[](1);
@@ -279,9 +295,10 @@ contract RelayAdaptM9Test is Test {
             blinding: 333,
             ephemeralPk: "",
             ct: "",
-            minOut: netShielded
+            minOut: posAmt
         });
 
+        _bind(unshieldPosArgs, closeCalls, closeOutputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldPosArgs, closeCalls, closeOutputs, alice);
 
@@ -295,6 +312,7 @@ contract RelayAdaptM9Test is Test {
         vm.prank(alice);
         pool.shield(address(usdg), depositRaw, ALICE_PK_X, 111, "", "");
         uint256 netShielded = depositRaw - (depositRaw * FEE_BPS) / 10000;
+        netShielded = _unshieldable(netShielded); // leave room for the enforced unshield fee
 
         CurtainPool.TransactArgs memory unshieldArgs = CurtainPool.TransactArgs({
             proof: "",
@@ -307,7 +325,9 @@ contract RelayAdaptM9Test is Test {
             cts: new bytes[](2),
             unshieldTo: address(adapt),
             unshieldAmount: netShielded,
-            feeAmount: 0
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](2);
@@ -332,6 +352,7 @@ contract RelayAdaptM9Test is Test {
             minOut: netShielded
         });
 
+        _bind(unshieldArgs, calls, outputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldArgs, calls, outputs, alice);
 
@@ -361,6 +382,7 @@ contract RelayAdaptM9Test is Test {
         vm.prank(alice);
         pool.shield(address(usdg), depositRaw, ALICE_PK_X, 111, "", "");
         uint256 netShielded = depositRaw - (depositRaw * FEE_BPS) / 10000;
+        netShielded = _unshieldable(netShielded); // leave room for the enforced unshield fee
 
         CurtainPool.TransactArgs memory unshieldArgs = CurtainPool.TransactArgs({
             proof: "",
@@ -373,7 +395,9 @@ contract RelayAdaptM9Test is Test {
             cts: new bytes[](2),
             unshieldTo: address(adapt),
             unshieldAmount: netShielded,
-            feeAmount: 0
+            feeAmount: 0,
+            feeRecipient: address(0),
+            extData: bytes32(0)
         });
 
         RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](6);
@@ -422,6 +446,7 @@ contract RelayAdaptM9Test is Test {
             minOut: netShielded
         });
 
+        _bind(unshieldArgs, calls, outputs, alice);
         vm.prank(alice);
         adapt.relay(unshieldArgs, calls, outputs, alice);
 
@@ -443,5 +468,22 @@ contract RelayAdaptM9Test is Test {
         arr = new bytes32[](2);
         arr[0] = c1;
         arr[1] = c2;
+    }
+
+    /// Largest unshield amount U with U + protocolFee(U) <= bal (the pool enforces the fee).
+    function _unshieldable(uint256 bal) internal view returns (uint256) {
+        return (bal * 10000) / (10000 + pool.feeBps());
+    }
+
+    /// What a wallet does before proving a relay: pay the protocol fee and bind the relay's
+    /// calls, outputs and origin into extData (checked by RelayAdapt, proved via extDataHash).
+    function _bind(
+        CurtainPool.TransactArgs memory a,
+        RelayAdapt.Call[] memory calls,
+        RelayAdapt.ReshieldOutput[] memory outputs,
+        address origin
+    ) internal view {
+        a.feeAmount = pool.protocolFeeFor(a.unshieldAmount);
+        a.extData = adapt.relayDataHash(calls, outputs, origin);
     }
 }

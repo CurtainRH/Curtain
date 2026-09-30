@@ -48,7 +48,7 @@ contract ScreeningGateTest is Test {
 
         pool = new CurtainPool(
             hasherT3, hasherT5, address(assetGate), address(gate), address(v2), address(v3),
-            address(unshieldVerifier), address(0), address(0x7EA5), FEE_BPS, FEE_BPS, address(0)
+            address(unshieldVerifier), address(0), address(0x7EA5), address(0) /* feeSource */, FEE_BPS, address(0), address(0) /* guardian */
         );
         gate.setPool(address(pool));
 
@@ -174,7 +174,8 @@ contract ScreeningGateTest is Test {
 
         string memory flagJson = _readFixture("test/fixtures/flag_proof.json");
         bytes32 flagRoot = vm.parseJsonBytes32(flagJson, ".flagRoot");
-        (bytes32 existingListRoot,,,,) = gate.providers(0);
+        (bytes32 existingListRoot,,,,,,,) = gate.providers(0);
+        gate.removeProvider(0); // addProvider can't overwrite an active provider
         gate.addProvider(0, address(this), existingListRoot, flagRoot);
 
         // bob's note (address 0xB0B) is the one listed in the flag fixture.
@@ -198,7 +199,8 @@ contract ScreeningGateTest is Test {
         _registerProvidersFromFixture();
         string memory flagJson = _readFixture("test/fixtures/flag_proof.json");
         bytes32 flagRoot = vm.parseJsonBytes32(flagJson, ".flagRoot");
-        (bytes32 existingListRoot,,,,) = gate.providers(0);
+        (bytes32 existingListRoot,,,,,,,) = gate.providers(0);
+        gate.removeProvider(0); // addProvider can't overwrite an active provider
         gate.addProvider(0, address(this), existingListRoot, flagRoot);
 
         vm.prank(bob);
@@ -223,7 +225,8 @@ contract ScreeningGateTest is Test {
 
         string memory flagJson = _readFixture("test/fixtures/flag_proof.json");
         bytes32 flagRoot = vm.parseJsonBytes32(flagJson, ".flagRoot");
-        (bytes32 existingListRoot,,,,) = gate.providers(0);
+        (bytes32 existingListRoot,,,,,,,) = gate.providers(0);
+        gate.removeProvider(0); // addProvider can't overwrite an active provider
         gate.addProvider(0, address(this), existingListRoot, flagRoot);
 
         uint256[32] memory pathElements;
@@ -244,13 +247,13 @@ contract ScreeningGateTest is Test {
 
         // addProvider itself sets updatedAt=now, so updateRoot is rate
         // limited immediately too — advance past that window first.
-        vm.warp(block.timestamp + 1 hours + 1);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
         gate.updateRoot(0, bytes32(uint256(2)), bytes32(0));
 
         vm.expectRevert(ScreeningGate.RateLimited.selector);
         gate.updateRoot(0, bytes32(uint256(3)), bytes32(0));
 
-        vm.warp(block.timestamp + 1 hours + 1);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
         gate.updateRoot(0, bytes32(uint256(3)), bytes32(0)); // now succeeds
     }
 

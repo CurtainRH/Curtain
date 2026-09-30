@@ -28,6 +28,14 @@ import {ICurtainPool} from "../pool/ICurtainPool.sol";
 /// on-chain SMT membership verifier). The tradeoff: providers publish two
 /// roots instead of one.
 ///
+/// ROOT SET (post-audit fixes, Curtain_Backend.md §2.2 / Curtain_Build.md §10):
+/// - A removed or stale provider (no root update in 24h) is excluded by proving against the
+///   empty-tree root 0 in its slot, so the circuit (fixed K=3) needs no change. At least one
+///   fresh provider is required to clear via PPOI; with fewer than 2, standby extends to 60 min.
+/// - Root-update race: a proof may use a provider's previous list root for up to
+///   ROOT_UPDATE_MIN_INTERVAL after that provider updates (`usePrevMask` bit i = provider i).
+/// - `addProvider` can't overwrite an active provider; remove it first.
+///
 /// Dev-scale: hardcoded to exactly 3 providers (indices 0-2), matching
 /// ppoi_dev.circom's K=3. Scaling K is a circuit-parameter change (see
 /// ppoi_main.circom), not a ScreeningGate logic change.
@@ -38,6 +46,9 @@ contract ScreeningGate is IScreeningGate, Ownable {
         uint64 updatedAt;
         address publisher;
         bool active;
+        bytes32 prevListRoot;
+        bytes32 prevFlagRoot;
+        bool hasPrev;
     }
 
     uint8 public constant PROVIDER_COUNT = 3;
@@ -74,6 +85,10 @@ contract ScreeningGate is IScreeningGate, Ownable {
     error StandbyElapsed();
     error InvalidPpoiProof();
     error InvalidMembershipProof();
+    error ProviderIdOutOfRange();
+    error ProviderAlreadyActive();
+    error NoFreshProvider();
+    error PreviousRootUnavailable(uint8 id);
 
     constructor(address originHasherAddr, address merkleHasherAddr, address ppoiVerifierAddr, address initialOwner)
         Ownable(initialOwner)
@@ -96,12 +111,17 @@ contract ScreeningGate is IScreeningGate, Ownable {
         external
         onlyOwner
     {
+        if (id >= PROVIDER_COUNT) revert ProviderIdOutOfRange();
+        if (providers[id].active) revert ProviderAlreadyActive();
         providers[id] = Provider({
             listRoot: initialListRoot,
             flagRoot: initialFlagRoot,
             updatedAt: uint64(block.timestamp),
             publisher: publisher,
-            active: true
+            active: true,
+            prevListRoot: bytes32(0),
+            prevFlagRoot: bytes32(0),
+            hasPrev: false
         });
         emit ProviderUpdated(id, initialListRoot, initialFlagRoot);
     }
@@ -118,16 +138,40 @@ contract ScreeningGate is IScreeningGate, Ownable {
         if (msg.sender != p.publisher) revert NotPublisher();
         if (block.timestamp < p.updatedAt + ROOT_UPDATE_MIN_INTERVAL) revert RateLimited();
 
+        p.prevListRoot = p.listRoot;
+        p.prevFlagRoot = p.flagRoot;
+        p.hasPrev = true;
         p.listRoot = newListRoot;
         p.flagRoot = newFlagRoot;
         p.updatedAt = uint64(block.timestamp);
         emit ProviderUpdated(id, newListRoot, newFlagRoot);
     }
 
+    function isFresh(uint8 id) public view returns (bool) {
+        Provider storage p = providers[id];
+        return p.active && block.timestamp <= p.updatedAt + PROVIDER_STALE_AFTER;
+    }
+
     function freshProviderCount() public view returns (uint8 count) {
         for (uint8 i = 0; i < PROVIDER_COUNT; i++) {
-            if (providers[i].active && block.timestamp <= providers[i].updatedAt + PROVIDER_STALE_AFTER) {
-                count++;
+            if (isFresh(i)) count++;
+        }
+    }
+
+    /// @notice The list roots a PPOI proof must be generated against. Excluded (removed or
+    /// stale) providers are root 0, the empty tree. Bit i of `usePrevMask` selects provider
+    /// i's previous root, allowed only within ROOT_UPDATE_MIN_INTERVAL of its last update.
+    function ppoiRoots(uint8 usePrevMask) public view returns (bytes32[3] memory roots) {
+        for (uint8 i = 0; i < PROVIDER_COUNT; i++) {
+            if (!isFresh(i)) continue; // excluded: root stays 0
+            Provider storage p = providers[i];
+            if (usePrevMask & (uint8(1) << i) != 0) {
+                if (!p.hasPrev || block.timestamp > p.updatedAt + ROOT_UPDATE_MIN_INTERVAL) {
+                    revert PreviousRootUnavailable(i);
+                }
+                roots[i] = p.prevListRoot;
+            } else {
+                roots[i] = p.listRoot;
             }
         }
     }
@@ -142,6 +186,17 @@ contract ScreeningGate is IScreeningGate, Ownable {
     /// callers cannot substitute a different address to launder a listed
     /// origin's note.
     function ppoiVerify(bytes32 commit, bytes calldata proof) external {
+        _ppoiVerify(commit, proof, 0);
+    }
+
+    /// @notice As `ppoiVerify`, but lets the proof use providers' previous roots (see
+    /// `ppoiRoots`) so a proof built just before a root update still lands.
+    function ppoiVerify(bytes32 commit, bytes calldata proof, uint8 usePrevMask) external {
+        _ppoiVerify(commit, proof, usePrevMask);
+    }
+
+    function _ppoiVerify(bytes32 commit, bytes calldata proof, uint8 usePrevMask) internal {
+        if (freshProviderCount() == 0) revert NoFreshProvider();
         if (flagged[commit]) revert AlreadyFlagged();
         if (cleared[commit]) revert AlreadyCleared();
 
@@ -151,10 +206,12 @@ contract ScreeningGate is IScreeningGate, Ownable {
         address origin = pool.originOf(commit);
         uint256 originHash = originHasher.poseidon([uint256(uint160(origin))]);
 
+        bytes32[3] memory roots = ppoiRoots(usePrevMask);
+
         uint256[] memory signals = new uint256[](6);
-        signals[0] = uint256(providers[0].listRoot);
-        signals[1] = uint256(providers[1].listRoot);
-        signals[2] = uint256(providers[2].listRoot);
+        signals[0] = uint256(roots[0]);
+        signals[1] = uint256(roots[1]);
+        signals[2] = uint256(roots[2]);
         signals[3] = uint256(commit);
         // ppoi.circom's public `shieldBlock` is an opaque binding value with
         // no further in-circuit constraint (see its header) — we use the
@@ -188,14 +245,25 @@ contract ScreeningGate is IScreeningGate, Ownable {
         Provider storage p = providers[providerId];
         if (!p.active) revert UnknownProvider();
 
-        address origin = pool.originOf(commit);
-        uint256 leaf = uint256(uint160(origin));
-        if (!MerkleProof32.verify(merkleHasher, leaf, pathElements, pathIndices, uint256(p.flagRoot))) {
+        if (!_inFlagList(p, uint256(uint160(pool.originOf(commit))), pathElements, pathIndices)) {
             revert InvalidMembershipProof();
         }
 
         flagged[commit] = true;
         emit Flagged(commit, providerId);
+    }
+
+    /// @dev Membership in the provider's current flag root, or its previous one within
+    /// ROOT_UPDATE_MIN_INTERVAL of an update (same race window as `ppoiRoots`).
+    function _inFlagList(
+        Provider storage p,
+        uint256 leaf,
+        uint256[32] calldata pathElements,
+        uint8[32] calldata pathIndices
+    ) internal view returns (bool) {
+        if (MerkleProof32.verify(merkleHasher, leaf, pathElements, pathIndices, uint256(p.flagRoot))) return true;
+        if (!p.hasPrev || block.timestamp > p.updatedAt + ROOT_UPDATE_MIN_INTERVAL) return false;
+        return MerkleProof32.verify(merkleHasher, leaf, pathElements, pathIndices, uint256(p.prevFlagRoot));
     }
 
     /// @notice `!flagged && (cleared || standby elapsed)` — the same

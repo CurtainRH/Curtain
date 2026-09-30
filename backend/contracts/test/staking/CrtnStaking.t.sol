@@ -156,7 +156,7 @@ contract CrtnStakingTest is Test {
         staking.castVote(pid, true);
 
         // Advance time past voting period (3 days)
-        vm.warp(block.timestamp + 3 days + 1);
+        vm.warp(vm.getBlockTimestamp() + 3 days + 1);
 
         // Execute proposal
         staking.executeProposal(pid);
@@ -191,11 +191,11 @@ contract CrtnStakingTest is Test {
         staking.castVote(pid, true);
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 3 days + 1);
+        vm.warp(vm.getBlockTimestamp() + 3 days + 1);
         staking.executeProposal(pid);
 
         // Verify provider added on ScreeningGate contract
-        (bytes32 currentListRoot, bytes32 currentFlagRoot, uint64 updatedAt, address currentPublisher, bool active) = gate.providers(providerId);
+        (bytes32 currentListRoot, bytes32 currentFlagRoot, uint64 updatedAt, address currentPublisher, bool active,,,) = gate.providers(providerId);
         assertTrue(active);
         assertEq(currentPublisher, publisher);
         assertEq(currentListRoot, listRoot);
@@ -208,10 +208,10 @@ contract CrtnStakingTest is Test {
         staking.castVote(pid2, true);
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 3 days + 1);
+        vm.warp(vm.getBlockTimestamp() + 3 days + 1);
         staking.executeProposal(pid2);
 
-        (,,,, active) = gate.providers(providerId);
+        (,,,, active,,,) = gate.providers(providerId);
         assertFalse(active);
     }
 
@@ -225,7 +225,7 @@ contract CrtnStakingTest is Test {
         staking.castVote(pid, true);
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 3 days + 1);
+        vm.warp(vm.getBlockTimestamp() + 3 days + 1);
         staking.executeProposal(pid);
 
         assertTrue(adapt.allowedTarget(target));

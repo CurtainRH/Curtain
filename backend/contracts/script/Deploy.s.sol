@@ -2,10 +2,13 @@
 pragma solidity 0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {ERC2771Forwarder} from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 import {CurtainPool} from "../src/pool/CurtainPool.sol";
 import {AssetGate} from "../src/config/AssetGate.sol";
 import {ScreeningGate} from "../src/gate/ScreeningGate.sol";
 import {RelayAdapt} from "../src/adapt/RelayAdapt.sol";
+import {Guardian} from "../src/guardian/Guardian.sol";
 import {BroadcasterBond} from "../src/broadcast/BroadcasterBond.sol";
 import {StealthRegistry} from "../src/stealth/StealthRegistry.sol";
 import {StealthAnnouncer} from "../src/stealth/StealthAnnouncer.sol";
@@ -13,7 +16,6 @@ import {DisclosureRegistry} from "../src/disclosure/DisclosureRegistry.sol";
 import {SolvencyVerifier} from "../src/solvency/SolvencyVerifier.sol";
 import {CRTN} from "../src/token/CRTN.sol";
 import {CrtnStaking} from "../src/staking/CrtnStaking.sol";
-import {ERC2771Forwarder} from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 
 import {PoseidonT2Deployer} from "../src/lib/PoseidonT2.sol";
 import {PoseidonT3Deployer} from "../src/lib/PoseidonT3.sol";
@@ -31,38 +33,42 @@ import {SolvencyGroth16Verifier} from "../src/solvency/generated/SolvencyGroth16
 import {SolvencyVerifierAdapter} from "../src/solvency/SolvencyVerifierAdapter.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 
-/// @notice Curtain Protocol full deployment script per Runbook §7 (M12).
+/// @notice Curtain deployment per Curtain_Build.md §7 (runbook), for local dev and for
+/// Robinhood Chain (4663).
 ///
-/// Deployed addresses are held in STORAGE (state variables), not local
-/// stack variables — a single `run()` (or even a handful of helpers each
-/// returning several values) holding ~20 live locals simultaneously hits
-/// solc's "stack too deep" limit. Storage writes don't consume EVM stack
-/// slots, so this sidesteps the limit entirely. `via_ir` would also fix
-/// this, but as a project-wide toggle it changes codegen for every
-/// contract, not just this script — storage-based state is the narrower,
-/// safer fix for a one-shot deploy script with no ABI/gas surface to
-/// worry about.
+/// PRODUCTION MODE (chainid 4663) refuses anything dev-only:
+/// - PRIVATE_KEY must be set (no fallback key).
+/// - MULTISIG_ADDR (2-of-3 Safe), GUARDIAN_ADDR, TREASURY_ADDR and the four CRTN buckets
+///   must be set.
+/// - Tokens come from env (USDG_ADDR, NVDA_ADDR, TSLA_ADDR, SPY_ADDR, QQQ_ADDR, HOOD_ADDR),
+///   never MockERC20.
+/// - Groth16 verifiers come from env (*_VERIFIER_ADDR), deployed from the real multi-party
+///   ceremony's keys. The verifiers generated in this repo are single-contributor dev keys
+///   (circuits/build/ceremony.md) and are only deployed on local chains.
 ///
-/// TWO BUGS FOUND AND FIXED HERE (see Curtain_Build.md §11): this script
-/// originally (a) never transferred ScreeningGate/RelayAdapt ownership to
-/// CrtnStaking, so every governance proposal's execution would revert
-/// forever against a freshly-deployed protocol (CrtnStaking would never
-/// actually own the contracts it's supposed to govern), and (b) never
-/// pointed CurtainPool's `treasury` at CrtnStaking, so the 60/40 fee
-/// split described in Curtain_Build.md §3.9 was fully implemented and
-/// tested in CrtnStaking.sol in isolation but never actually reachable —
-/// 100% of every shield/unshield fee went straight to a plain EOA
-/// forever, exactly as before M11 existed. Both are fixed below:
-/// CurtainPool's `treasury` constructor arg is now `address(staking)`
-/// (a plain ERC-20 `transfer` to a contract works identically to one to
-/// an EOA — CurtainPool needs no code changes at all, preserving its
-/// immutability guarantee completely untouched), and ScreeningGate/
-/// RelayAdapt ownership is transferred to `staking` as the final step,
-/// after the one-time `gate.setPool()` bootstrap that only the deployer
-/// (not yet-transferred-away owner) can perform.
+/// GOVERNANCE WIRING (Curtain_Backend.md §2.8):
+/// - A TimelockController with a 24h delay owns ScreeningGate, RelayAdapt, AssetGate,
+///   BroadcasterBond and Guardian. Proposers: the multisig and CrtnStaking (passed governor
+///   votes). Cancellers: the same, so the multisig can veto a queued vote. Executor: anyone,
+///   after the delay. No admin, so nobody can bypass the delay.
+/// - CurtainPool reads its fee from CrtnStaking (clamped to 10-30 bps) and its shield pause
+///   from Guardian; it has no owner. Its `treasury` is CrtnStaking, which splits fees 60/40.
+/// - Guardian's pause key (GUARDIAN_ADDR) can pause shield and relay only.
+///
+/// Writes deployments/<chainid>.json with every address and its code hash; Pin.s.sol checks
+/// a live deployment against that file.
+///
+/// Addresses live in storage rather than locals to stay clear of "stack too deep".
 contract DeployScript is Script {
-    address public deployer;
+    uint256 internal constant RHC_CHAIN_ID = 4663;
+    uint256 internal constant TIMELOCK_DELAY = 24 hours;
+    // Anvil account #0 — public, well-known, for local chains only (never used on 4663).
+    uint256 internal constant ANVIL_DEV_KEY = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
+    bool public production;
+    address public deployer;
+    address public multisig;
+    address public guardianKey;
     address public treasury;
     address public communityBucket;
     address public teamBucket;
@@ -81,9 +87,12 @@ contract DeployScript is Script {
 
     AssetGate public assetGate;
     address public usdg;
+    address[] public stockTokens;
 
     CRTN public crtn;
     CrtnStaking public staking;
+    TimelockController public timelock;
+    Guardian public guardian;
 
     ScreeningGate public gate;
     DisclosureRegistry public disclosure;
@@ -98,34 +107,44 @@ contract DeployScript is Script {
     BroadcasterBond public bond;
 
     function run() external {
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        production = block.chainid == RHC_CHAIN_ID;
+        uint256 deployerPrivateKey = production ? vm.envUint("PRIVATE_KEY") : vm.envOr("PRIVATE_KEY", ANVIL_DEV_KEY);
         deployer = vm.addr(deployerPrivateKey);
 
-        // Short hex literals (not 40 digits) are placeholder/vanity
-        // addresses only, meant to be overridden via env vars for any real
-        // deployment — same convention as the test suites' treasury/alice
-        // placeholders. A full 40-digit literal here would need to be a
-        // real EIP-55 checksummed address or solc rejects it at compile
-        // time; short literals sidestep that checksum requirement entirely.
-        treasury = vm.envOr("TREASURY_ADDR", address(0x7EA5));
-        communityBucket = vm.envOr("COMMUNITY_BUCKET", address(0xC001));
-        teamBucket = vm.envOr("TEAM_BUCKET", address(0x7EA7));
-        backersBucket = vm.envOr("BACKERS_BUCKET", address(0xBAC0));
-        subsidiesBucket = vm.envOr("SUBSIDIES_BUCKET", address(0x5080));
+        if (production) {
+            multisig = vm.envAddress("MULTISIG_ADDR");
+            guardianKey = vm.envAddress("GUARDIAN_ADDR");
+            treasury = vm.envAddress("TREASURY_ADDR");
+            communityBucket = vm.envAddress("COMMUNITY_BUCKET");
+            teamBucket = vm.envAddress("TEAM_BUCKET");
+            backersBucket = vm.envAddress("BACKERS_BUCKET");
+            subsidiesBucket = vm.envAddress("SUBSIDIES_BUCKET");
+            require(multisig.code.length > 0, "DeployScript: MULTISIG_ADDR must be a deployed Safe");
+        } else {
+            // Short literals are placeholders for local chains only.
+            multisig = vm.envOr("MULTISIG_ADDR", deployer);
+            guardianKey = vm.envOr("GUARDIAN_ADDR", deployer);
+            treasury = vm.envOr("TREASURY_ADDR", address(0x7EA5));
+            communityBucket = vm.envOr("COMMUNITY_BUCKET", address(0xC001));
+            teamBucket = vm.envOr("TEAM_BUCKET", address(0x7EA7));
+            backersBucket = vm.envOr("BACKERS_BUCKET", address(0xBAC0));
+            subsidiesBucket = vm.envOr("SUBSIDIES_BUCKET", address(0x5080));
+        }
 
         vm.startBroadcast(deployerPrivateKey);
 
         _deployHashers();
         _deployVerifiers();
         _deployAssetGateAndTokens();
-        _deployCrtnAndStaking();
+        _deployCrtnStakingAndTimelock();
         _deployPoolStack();
         _deployStealth();
         _deployBroadcasterBond();
-        _transferGovernanceOwnership();
+        _transferOwnershipToTimelock();
 
         vm.stopBroadcast();
 
+        _writeDeployment();
         _logSummary();
     }
 
@@ -136,73 +155,79 @@ contract DeployScript is Script {
     }
 
     function _deployVerifiers() internal {
-        address v2x2Raw = address(new JoinSplit2x2Groth16Verifier());
-        verifierAdapterJoinSplit2x2 = address(new JoinSplit2x2VerifierAdapter(v2x2Raw));
+        address v2x2 = production ? vm.envAddress("JOINSPLIT2X2_VERIFIER_ADDR") : address(new JoinSplit2x2Groth16Verifier());
+        address v3x3 = production ? vm.envAddress("JOINSPLIT3X3_VERIFIER_ADDR") : address(new JoinSplit3x3Groth16Verifier());
+        address vUnshield = production ? vm.envAddress("UNSHIELD_VERIFIER_ADDR") : address(new UnshieldGroth16Verifier());
+        address vPpoi = production ? vm.envAddress("PPOI_VERIFIER_ADDR") : address(new PpoiDevGroth16Verifier());
+        address vSolvency = production ? vm.envAddress("SOLVENCY_VERIFIER_ADDR") : address(new SolvencyGroth16Verifier());
+        if (production) {
+            require(v2x2.code.length > 0 && v3x3.code.length > 0 && vUnshield.code.length > 0, "DeployScript: missing verifier");
+            require(vPpoi.code.length > 0 && vSolvency.code.length > 0, "DeployScript: missing verifier");
+        }
 
-        address v3x3Raw = address(new JoinSplit3x3Groth16Verifier());
-        verifierAdapterJoinSplit3x3 = address(new JoinSplit3x3VerifierAdapter(v3x3Raw));
-
-        address vUnshieldRaw = address(new UnshieldGroth16Verifier());
-        verifierAdapterUnshield = address(new UnshieldVerifierAdapter(vUnshieldRaw));
-
-        address vPpoiRaw = address(new PpoiDevGroth16Verifier());
-        verifierAdapterPpoi = address(new PpoiDevVerifierAdapter(vPpoiRaw));
-
-        address vSolvencyRaw = address(new SolvencyGroth16Verifier());
-        verifierAdapterSolvency = address(new SolvencyVerifierAdapter(vSolvencyRaw));
+        verifierAdapterJoinSplit2x2 = address(new JoinSplit2x2VerifierAdapter(v2x2));
+        verifierAdapterJoinSplit3x3 = address(new JoinSplit3x3VerifierAdapter(v3x3));
+        verifierAdapterUnshield = address(new UnshieldVerifierAdapter(vUnshield));
+        verifierAdapterPpoi = address(new PpoiDevVerifierAdapter(vPpoi));
+        verifierAdapterSolvency = address(new SolvencyVerifierAdapter(vSolvency));
     }
 
     function _deployAssetGateAndTokens() internal {
         assetGate = new AssetGate(deployer);
 
-        usdg = address(new MockERC20("USD Global", "USDG"));
-        assetGate.register(usdg, false, address(0));
+        usdg = _token("USDG_ADDR", "USD Global", "USDG");
+        assetGate.register(usdg, false, vm.envOr("USDG_FEED", address(0)));
 
-        address nvda = address(new MockERC20("NVIDIA Stock Token", "NVDA"));
-        assetGate.register(nvda, true, address(0));
-
-        address tsla = address(new MockERC20("Tesla Stock Token", "TSLA"));
-        assetGate.register(tsla, true, address(0));
-
-        address spy = address(new MockERC20("S&P 500 ETF", "SPY"));
-        assetGate.register(spy, true, address(0));
-
-        address qqq = address(new MockERC20("Invesco QQQ Trust", "QQQ"));
-        assetGate.register(qqq, true, address(0));
-
-        address hood = address(new MockERC20("Robinhood Markets Inc", "HOOD"));
-        assetGate.register(hood, true, address(0));
+        stockTokens.push(_token("NVDA_ADDR", "NVIDIA Stock Token", "NVDA"));
+        stockTokens.push(_token("TSLA_ADDR", "Tesla Stock Token", "TSLA"));
+        stockTokens.push(_token("SPY_ADDR", "S&P 500 ETF", "SPY"));
+        stockTokens.push(_token("QQQ_ADDR", "Invesco QQQ Trust", "QQQ"));
+        stockTokens.push(_token("HOOD_ADDR", "Robinhood Markets Inc", "HOOD"));
+        for (uint256 i = 0; i < stockTokens.length; i++) {
+            assetGate.register(stockTokens[i], true, address(0));
+        }
     }
 
-    /// @dev Deployed BEFORE CurtainPool (deviating from the original draft's order) because
-    /// CurtainPool's constructor needs `address(staking)` as its `treasury` argument — see
-    /// this file's header on the fee-routing fix.
-    function _deployCrtnAndStaking() internal {
+    /// @dev Real token from env on 4663; a fresh MockERC20 on local chains.
+    function _token(string memory envKey, string memory name, string memory symbol) internal returns (address token) {
+        if (production) {
+            token = vm.envAddress(envKey);
+            require(token.code.length > 0, string.concat("DeployScript: no code at ", envKey));
+        } else {
+            token = address(new MockERC20(name, symbol));
+        }
+    }
+
+    /// @dev Staking before the pool (it is the pool's treasury and fee source) and before the
+    /// timelock (it is one of the timelock's proposers).
+    function _deployCrtnStakingAndTimelock() internal {
         crtn = new CRTN(communityBucket, teamBucket, backersBucket, subsidiesBucket);
         staking = new CrtnStaking(address(crtn), treasury);
+
+        address[] memory proposers = new address[](2);
+        proposers[0] = multisig;
+        proposers[1] = address(staking);
+        address[] memory executors = new address[](1); // address(0): anyone executes after the delay
+        timelock = new TimelockController(TIMELOCK_DELAY, proposers, executors, address(0));
+        staking.setTimelock(address(timelock));
+
+        guardian = new Guardian(deployer, guardianKey);
     }
 
     function _deployPoolStack() internal {
         gate = new ScreeningGate(
-            PoseidonT2Deployer(hasherT2).hasher(),
-            PoseidonT3Deployer(hasherT3).hasher(),
-            verifierAdapterPpoi,
-            deployer
+            PoseidonT2Deployer(hasherT2).hasher(), PoseidonT3Deployer(hasherT3).hasher(), verifierAdapterPpoi, deployer
         );
 
         disclosure = new DisclosureRegistry();
 
-        // Unmodified deployment of OpenZeppelin's audited ERC2771Forwarder — CurtainPool's
-        // sole trusted forwarder for gasless `shieldMeta` bundles (see CurtainPool.sol's
-        // header on why this preserves origin-binding security instead of a naive
-        // forwarder-holds-funds design).
+        // Unmodified OpenZeppelin ERC2771Forwarder: CurtainPool's sole trusted forwarder for
+        // gasless `shieldMeta` bundles (see CurtainPool.sol's header).
         forwarder = new ERC2771Forwarder("Curtain");
 
-        // Predict RelayAdapt's address (deployed right after CurtainPool, at
-        // nonce+1) so it can be baked into CurtainPool's constructor with no
-        // mutable setter — see CurtainPool.sol's header.
-        uint256 currentNonce = vm.getNonce(deployer);
-        address predictedRelayAdapt = vm.computeCreateAddress(deployer, currentNonce + 1);
+        // RelayAdapt lands at nonce+1, right after CurtainPool — baked into the pool's
+        // constructor so the pool needs no setter (see CurtainPool.sol's header).
+        address predictedRelayAdapt = vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1);
 
         pool = new CurtainPool(
             PoseidonT3Deployer(hasherT3).hasher(),
@@ -213,17 +238,17 @@ contract DeployScript is Script {
             verifierAdapterJoinSplit3x3,
             verifierAdapterUnshield,
             predictedRelayAdapt,
-            address(staking), // fee-routing fix — see this file's header
-            20, // 0.20% shield fee
-            20, // 0.20% unshield fee
-            address(forwarder)
+            address(staking), // treasury: CrtnStaking splits fees 60/40
+            address(staking), // fee source: governed fee, clamped by the pool
+            20, // default 0.20%
+            address(forwarder),
+            address(guardian)
         );
 
         adapt = new RelayAdapt(address(pool), deployer);
         require(address(adapt) == predictedRelayAdapt, "DeployScript: predicted RelayAdapt address mismatch");
 
-        // One-time bootstrap — must happen while `deployer` is still the
-        // owner, i.e. before _transferGovernanceOwnership() runs.
+        // One-time bootstrap while `deployer` still owns the gate.
         gate.setPool(address(pool));
 
         solvencyVerifier = new SolvencyVerifier(address(pool), verifierAdapterSolvency);
@@ -238,28 +263,67 @@ contract DeployScript is Script {
         bond = new BroadcasterBond(address(crtn), treasury, deployer);
     }
 
-    /// @dev Governance ownership fix — see this file's header. Must run after
-    /// `gate.setPool()` (which needs `deployer` to still be the owner).
-    function _transferGovernanceOwnership() internal {
-        gate.transferOwnership(address(staking));
-        adapt.transferOwnership(address(staking));
+    /// @dev Last step: after it, the deployer owns nothing. Providers, relay targets and
+    /// broadcaster attestors are then added through the timelock (multisig or governors).
+    function _transferOwnershipToTimelock() internal {
+        gate.transferOwnership(address(timelock));
+        adapt.transferOwnership(address(timelock));
+        assetGate.transferOwnership(address(timelock));
+        bond.transferOwnership(address(timelock));
+        guardian.transferOwnership(address(timelock));
+    }
+
+    function _writeDeployment() internal {
+        string memory k = "deployment";
+        vm.serializeUint(k, "chainId", block.chainid);
+        vm.serializeBool(k, "production", production);
+        vm.serializeAddress(k, "deployer", deployer);
+        vm.serializeAddress(k, "multisig", multisig);
+        vm.serializeAddress(k, "guardianKey", guardianKey);
+        vm.serializeAddress(k, "usdg", usdg);
+        vm.serializeAddress(k, "stockTokens", stockTokens);
+        string memory contracts_ = _serializeContracts();
+        string memory json = vm.serializeString(k, "contracts", contracts_);
+        vm.writeJson(json, string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), ".json"));
+    }
+
+    function _serializeContracts() internal returns (string memory json) {
+        string[15] memory names = [
+            "CurtainPool", "RelayAdapt", "ScreeningGate", "AssetGate", "Guardian", "TimelockController",
+            "CrtnStaking", "CRTN", "BroadcasterBond", "SolvencyVerifier", "DisclosureRegistry",
+            "StealthRegistry", "StealthAnnouncer", "ERC2771Forwarder", "PpoiVerifierAdapter"
+        ];
+        address[15] memory addrs = [
+            address(pool), address(adapt), address(gate), address(assetGate), address(guardian), address(timelock),
+            address(staking), address(crtn), address(bond), address(solvencyVerifier), address(disclosure),
+            address(stealthRegistry), address(stealthAnnouncer), address(forwarder), verifierAdapterPpoi
+        ];
+        for (uint256 i = 0; i < names.length; i++) {
+            string memory entry = names[i];
+            vm.serializeAddress(entry, "address", addrs[i]);
+            string memory entryJson = vm.serializeBytes32(entry, "codehash", addrs[i].codehash);
+            json = vm.serializeString("contracts", names[i], entryJson);
+        }
     }
 
     function _logSummary() internal view {
         console.log("--- CURTAIN DEPLOYMENT SUMMARY ---");
+        console.log("Mode:              ", production ? "production (4663)" : "local/dev");
         console.log("CurtainPool:       ", address(pool));
-        console.log("AssetGate:         ", address(assetGate));
-        console.log("ScreeningGate:     ", address(gate));
         console.log("RelayAdapt:        ", address(adapt));
-        console.log("DisclosureRegistry:", address(disclosure));
-        console.log("ERC2771Forwarder:  ", address(forwarder));
+        console.log("ScreeningGate:     ", address(gate));
+        console.log("AssetGate:         ", address(assetGate));
+        console.log("Guardian:          ", address(guardian));
+        console.log("Timelock (24h):    ", address(timelock));
+        console.log("CrtnStaking:       ", address(staking));
+        console.log("CRTN Token:        ", address(crtn));
+        console.log("BroadcasterBond:   ", address(bond));
         console.log("SolvencyVerifier:  ", address(solvencyVerifier));
+        console.log("DisclosureRegistry:", address(disclosure));
         console.log("StealthRegistry:   ", address(stealthRegistry));
         console.log("StealthAnnouncer:  ", address(stealthAnnouncer));
-        console.log("CRTN Token:        ", address(crtn));
-        console.log("CrtnStaking:       ", address(staking));
-        console.log("BroadcasterBond:   ", address(bond));
+        console.log("ERC2771Forwarder:  ", address(forwarder));
         console.log("USDG Token:        ", usdg);
-        console.log("Fee treasury (CurtainPool -> CrtnStaking -> 60/40 split):", address(staking));
+        console.log("Wrote deployments/<chainid>.json; verify with: forge script script/Pin.s.sol");
     }
 }

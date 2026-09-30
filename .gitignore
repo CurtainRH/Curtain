@@ -54,3 +54,4 @@ backend/contracts/broadcast/*/31337/
 
 # Public-sync working branch artifacts
 .sync-public/
+backend/contracts/deployments/31337.json

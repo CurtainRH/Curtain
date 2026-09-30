@@ -50,9 +50,10 @@ contract CurtainPoolTest is Test {
             address(unshieldVerifier),
             address(0), // no RelayAdapt in this suite — reshield() is exercised in test/adapt/RelayAdapt.t.sol
             treasury,
+            address(0) /* feeSource */,
             FEE_BPS,
-            FEE_BPS,
-            address(0) // no meta-tx forwarder in this suite — exercised in test/pool/CurtainPoolMetaTx.t.sol
+            address(0), // no meta-tx forwarder in this suite — exercised in test/pool/CurtainPoolMetaTx.t.sol
+            address(0) /* guardian */
         );
 
         token = new MockERC20("USD Global", "USDG");

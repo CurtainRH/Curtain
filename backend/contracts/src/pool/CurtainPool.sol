@@ -11,6 +11,8 @@ import {IJoinSplitVerifier} from "./IJoinSplitVerifier.sol";
 import {IUnshieldVerifier} from "./IUnshieldVerifier.sol";
 import {AssetGate} from "../config/AssetGate.sol";
 import {IScreeningGate} from "../gate/IScreeningGate.sol";
+import {IFeeSource} from "./IFeeSource.sol";
+import {IGuardian} from "../guardian/IGuardian.sol";
 
 /// @notice Curtain's shielded UTXO pool, per Curtain_Build.md §3.1.
 /// Deliberately has NO owner, NO admin functions, and NO upgrade path —
@@ -91,6 +93,19 @@ import {IScreeningGate} from "../gate/IScreeningGate.sol";
 /// `msg.sender` uses were changed to `_msgSender()`; `reshield()`'s `msg.sender != relayAdapt`
 /// check is untouched (reshield is only ever called by RelayAdapt directly — meta-tx
 /// forwarding was never relevant there).
+///
+/// FEES, BROADCASTER PAY AND EXTDATA BINDING (post-audit fixes):
+/// - The protocol fee is `feeBps()` (governed via `feeSource`, clamped to [10, 30] bps,
+///   defaulting to `defaultFeeBps`). The pool has no fee setter of its own.
+/// - `transact()` charges it on `unshieldAmount`: `feeAmount` (proved in the circuit's
+///   balance equation) must cover it, and anything above it is the broadcaster's fee, paid to
+///   `feeRecipient`. Before this fix the prover picked `feeAmount` freely, so unshields could
+///   skip the fee, and broadcasters were never paid on-chain.
+/// - `extDataHash` now also binds `feeRecipient` and `extData`. RelayAdapt puts the hash of
+///   its calls, outputs and origin in `extData`, so a relay proof can't be replayed with
+///   different calls (the front-running theft in test/adapt/RelayFrontRun.t.sol).
+/// - `shield()` honours the Guardian's shield pause. `transact()` and `unshieldToOrigin()`
+///   never consult the Guardian.
 contract CurtainPool is ERC2771Context {
     using SafeERC20 for IERC20;
     using IncrementalMerkleTree for IncrementalMerkleTree.Tree;
@@ -99,8 +114,12 @@ contract CurtainPool is ERC2771Context {
     /// public circuit signal must live in this field.
     uint256 internal constant FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    uint16 public immutable feeBpsShield;
-    uint16 public immutable feeBpsUnshield;
+    uint16 public constant MIN_FEE_BPS = 10;
+    uint16 public constant MAX_FEE_BPS = 30;
+
+    uint16 public immutable defaultFeeBps;
+    IFeeSource public immutable feeSource;
+    IGuardian public immutable guardian;
     address public immutable treasury;
 
     IPoseidonT3 public immutable hasherT3;
@@ -133,6 +152,8 @@ contract CurtainPool is ERC2771Context {
         uint256 feeAmount;
         bytes[] ephemeralPks;
         bytes[] cts;
+        address feeRecipient; // broadcaster paid `feeAmount - protocolFee`; zero sends it all to treasury
+        bytes32 extData; // opaque, bound into extDataHash (RelayAdapt: hash of calls/outputs/origin)
     }
 
     event Shield(bytes32 indexed commit, uint32 leafIndex, address indexed token, uint256 rawAmount);
@@ -154,6 +175,9 @@ contract CurtainPool is ERC2771Context {
     error AlreadyClearedTreeMember();
     error NotSpendable();
     error NotRelayAdapt();
+    error FeeTooLow(uint256 feeAmount, uint256 protocolFee);
+    error ShieldPausedByGuardian();
+    error InvalidDefaultFee();
 
     constructor(
         address hasherT3Addr,
@@ -165,10 +189,12 @@ contract CurtainPool is ERC2771Context {
         address unshieldVerifierAddr,
         address relayAdaptAddr,
         address treasuryAddr,
-        uint16 feeBpsShield_,
-        uint16 feeBpsUnshield_,
-        address trustedForwarderAddr
+        address feeSourceAddr,
+        uint16 defaultFeeBps_,
+        address trustedForwarderAddr,
+        address guardianAddr
     ) ERC2771Context(trustedForwarderAddr) {
+        if (defaultFeeBps_ < MIN_FEE_BPS || defaultFeeBps_ > MAX_FEE_BPS) revert InvalidDefaultFee();
         hasherT3 = IPoseidonT3(hasherT3Addr);
         commitHasher = IPoseidonT5(hasherT5Addr);
         assetGate = AssetGate(assetGateAddr);
@@ -178,8 +204,9 @@ contract CurtainPool is ERC2771Context {
         unshieldVerifier = IUnshieldVerifier(unshieldVerifierAddr);
         relayAdapt = relayAdaptAddr;
         treasury = treasuryAddr;
-        feeBpsShield = feeBpsShield_;
-        feeBpsUnshield = feeBpsUnshield_;
+        feeSource = IFeeSource(feeSourceAddr);
+        defaultFeeBps = defaultFeeBps_;
+        guardian = IGuardian(guardianAddr);
 
         mainTree.init(hasherT3);
         clearedTree.init(hasherT3);
@@ -187,6 +214,35 @@ contract CurtainPool is ERC2771Context {
 
     function tokenIdOf(address token) public pure returns (uint256) {
         return uint256(keccak256(abi.encodePacked(token))) % FIELD_SIZE;
+    }
+
+    /// @notice Current protocol fee for shields and unshields, in bps. Read from `feeSource`
+    /// (governance) and clamped to [MIN_FEE_BPS, MAX_FEE_BPS]; falls back to `defaultFeeBps`
+    /// if there is no source or the call fails, so exits can never be blocked by it.
+    function feeBps() public view returns (uint16) {
+        if (address(feeSource) == address(0)) return defaultFeeBps;
+        try feeSource.currentFeeBps() returns (uint16 bps) {
+            if (bps < MIN_FEE_BPS) return MIN_FEE_BPS;
+            if (bps > MAX_FEE_BPS) return MAX_FEE_BPS;
+            return bps;
+        } catch {
+            return defaultFeeBps;
+        }
+    }
+
+    /// @notice Protocol fee owed on an unshield of `unshieldAmount`.
+    function protocolFeeFor(uint256 unshieldAmount) public view returns (uint256) {
+        return (unshieldAmount * feeBps()) / 10000;
+    }
+
+    /// @notice The `extDataHash` public signal a transact proof must be generated against.
+    /// Wallets, broadcasters and tests use this to match the pool exactly.
+    function extDataHashFor(address unshieldTo, uint256 unshieldAmount, uint256 feeAmount, address feeRecipient, bytes32 extData)
+        external
+        pure
+        returns (uint256)
+    {
+        return _extDataHash(unshieldTo, unshieldAmount, feeAmount, feeRecipient, extData) % FIELD_SIZE;
     }
 
     function currentRoot() external view returns (bytes32) {
@@ -215,10 +271,11 @@ contract CurtainPool is ERC2771Context {
         returns (bytes32 commit, uint32 leafIndex)
     {
         if (!assetGate.isRegistered(token)) revert TokenNotRegistered();
+        if (address(guardian) != address(0) && guardian.shieldPaused()) revert ShieldPausedByGuardian();
 
         IERC20(token).safeTransferFrom(_msgSender(), address(this), rawAmount);
 
-        uint256 fee = (rawAmount * feeBpsShield) / 10000;
+        uint256 fee = (rawAmount * feeBps()) / 10000;
         if (fee > 0) IERC20(token).safeTransfer(treasury, fee);
 
         commit = bytes32(commitHasher.poseidon([tokenIdOf(token), rawAmount - fee, ownerPkX, blinding]));
@@ -303,8 +360,11 @@ contract CurtainPool is ERC2771Context {
             if (nullifierUsed[a.nullifiers[i]]) revert NullifierAlreadyUsed();
         }
 
+        uint256 protocolFee = protocolFeeFor(a.unshieldAmount);
+        if (a.feeAmount < protocolFee) revert FeeTooLow(a.feeAmount, protocolFee);
+
         uint256 tokenId = tokenIdOf(a.token);
-        uint256 extDataHash = _extDataHash(a.unshieldTo, a.unshieldAmount, a.feeAmount) % FIELD_SIZE;
+        uint256 extDataHash = _extDataHash(a.unshieldTo, a.unshieldAmount, a.feeAmount, a.feeRecipient, a.extData) % FIELD_SIZE;
 
         uint256[] memory publicSignals = _buildPublicSignals(a, tokenId, extDataHash);
         IJoinSplitVerifier verifier = _verifierFor(a.nullifiers.length, a.newCommits.length);
@@ -326,7 +386,10 @@ contract CurtainPool is ERC2771Context {
             IERC20(a.token).safeTransfer(a.unshieldTo, a.unshieldAmount);
         }
         if (a.feeAmount > 0) {
-            IERC20(a.token).safeTransfer(treasury, a.feeAmount);
+            uint256 broadcasterFee = a.feeRecipient == address(0) ? 0 : a.feeAmount - protocolFee;
+            uint256 treasuryFee = a.feeAmount - broadcasterFee;
+            if (treasuryFee > 0) IERC20(a.token).safeTransfer(treasury, treasuryFee);
+            if (broadcasterFee > 0) IERC20(a.token).safeTransfer(a.feeRecipient, broadcasterFee);
         }
 
         emit Transact(a.nullifiers, a.newCommits, a.root, a.unshieldTo);
@@ -377,7 +440,7 @@ contract CurtainPool is ERC2771Context {
 
         nullifierUsed[bytes32(nullifier)] = true;
 
-        uint256 fee = (netAmount * feeBpsUnshield) / 10000;
+        uint256 fee = (netAmount * feeBps()) / 10000;
         uint256 payout = netAmount - fee;
         if (fee > 0) IERC20(token).safeTransfer(treasury, fee);
         IERC20(token).safeTransfer(origin, payout);
@@ -392,8 +455,12 @@ contract CurtainPool is ERC2771Context {
         revert UnsupportedArity();
     }
 
-    function _extDataHash(address unshieldTo, uint256 unshieldAmount, uint256 feeAmount) internal pure returns (uint256) {
-        return uint256(keccak256(abi.encode(unshieldTo, unshieldAmount, feeAmount)));
+    function _extDataHash(address unshieldTo, uint256 unshieldAmount, uint256 feeAmount, address feeRecipient, bytes32 extData)
+        internal
+        pure
+        returns (uint256)
+    {
+        return uint256(keccak256(abi.encode(unshieldTo, unshieldAmount, feeAmount, feeRecipient, extData)));
     }
 
     /// @dev Order MUST exactly match each joinsplitNxN.circom's

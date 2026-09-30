@@ -59,7 +59,7 @@ contract RelayAdaptTest is Test {
         pool = new CurtainPool(
             hasherT3, hasherT5, address(assetGate), address(screeningGate),
             address(verifier2x2), address(verifier3x3), address(unshieldVerifier),
-            predictedRelayAdapt, treasury, FEE_BPS, FEE_BPS, address(0)
+            predictedRelayAdapt, treasury, address(0) /* feeSource */, FEE_BPS, address(0), address(0) /* guardian */
         );
         relayAdapt = new RelayAdapt(address(pool), address(this));
         assertEq(address(relayAdapt), predictedRelayAdapt, "RelayAdapt landed at an unpredicted address");
@@ -126,8 +126,12 @@ contract RelayAdaptTest is Test {
 
         uint256 poolNvdaBalBefore = nvda.balanceOf(address(pool));
 
+        CurtainPool.TransactArgs memory args = _unshieldArgs(amountIn);
+        RelayAdapt.Call[] memory calls = _swapCall(amountIn, expectedOut);
+        _bind(args, calls, outputs, alice);
+
         vm.prank(relayer); // permissionless — not alice, not the RelayAdapt owner
-        relayAdapt.relay(_unshieldArgs(amountIn), _swapCall(amountIn, expectedOut), outputs, alice);
+        relayAdapt.relay(args, calls, outputs, alice);
 
         assertEq(nvda.balanceOf(address(pool)), poolNvdaBalBefore + expectedOut, "pool did not receive the reshielded NVDA");
         assertEq(usdg.balanceOf(address(relayAdapt)), 0, "USDG residue left in RelayAdapt");
@@ -148,6 +152,7 @@ contract RelayAdaptTest is Test {
         // pool.currentRoot() view call would otherwise be "the next call"
         // expectRevert actually checks, not relay() itself.
         CurtainPool.TransactArgs memory args = _unshieldArgs(10 ether);
+        _bind(args, calls, outputs, alice);
 
         vm.expectRevert(abi.encodeWithSelector(RelayAdapt.TargetNotAllowed.selector, address(0xDEAD)));
         relayAdapt.relay(args, calls, outputs, alice);
@@ -162,6 +167,7 @@ contract RelayAdaptTest is Test {
         });
         CurtainPool.TransactArgs memory args = _unshieldArgs(amountIn);
         RelayAdapt.Call[] memory calls = _swapCall(amountIn, 0);
+        _bind(args, calls, outputs, alice);
 
         vm.expectRevert(abi.encodeWithSelector(RelayAdapt.InsufficientOutput.selector, address(nvda), 100 ether, 999 ether));
         relayAdapt.relay(args, calls, outputs, alice);
@@ -177,6 +183,7 @@ contract RelayAdaptTest is Test {
         });
         CurtainPool.TransactArgs memory args = _unshieldArgs(amountIn);
         RelayAdapt.Call[] memory calls = _swapCall(amountActuallySwapped, 0);
+        _bind(args, calls, outputs, alice);
 
         vm.expectRevert(abi.encodeWithSelector(RelayAdapt.Residue.selector, address(usdg), 20 ether));
         relayAdapt.relay(args, calls, outputs, alice);
@@ -195,5 +202,84 @@ contract RelayAdaptTest is Test {
 
         vm.expectRevert(RelayAdapt.UnshieldMustTargetThis.selector);
         relayAdapt.relay(args, new RelayAdapt.Call[](0), outputs, alice);
+    }
+
+    // ---- post-audit fixes ----
+
+    function _bind(
+        CurtainPool.TransactArgs memory a,
+        RelayAdapt.Call[] memory calls,
+        RelayAdapt.ReshieldOutput[] memory outputs,
+        address origin
+    ) internal view {
+        a.feeAmount = pool.protocolFeeFor(a.unshieldAmount);
+        a.extData = relayAdapt.relayDataHash(calls, outputs, origin);
+    }
+
+    function _nvdaOutput(uint256 owner, uint256 minOut) internal view returns (RelayAdapt.ReshieldOutput[] memory outputs) {
+        outputs = new RelayAdapt.ReshieldOutput[](1);
+        outputs[0] = RelayAdapt.ReshieldOutput({
+            token: address(nvda), ownerPkX: owner, blinding: 9, ephemeralPk: "", ct: "", minOut: minOut
+        });
+    }
+
+    function test_relay_revertsWhenCallsDifferFromBoundExtData() public {
+        CurtainPool.TransactArgs memory args = _unshieldArgs(50 ether);
+        RelayAdapt.ReshieldOutput[] memory outputs = _nvdaOutput(111, 0);
+        _bind(args, _swapCall(50 ether, 0), outputs, alice);
+
+        // Same proof args, attacker's calls: a transfer of the unshielded USDG to themselves.
+        RelayAdapt.Call[] memory evil = new RelayAdapt.Call[](1);
+        evil[0] = RelayAdapt.Call(address(usdg), 0, abi.encodeCall(IERC20.transfer, (relayer, 50 ether)));
+
+        vm.expectRevert(RelayAdapt.RelayDataMismatch.selector);
+        vm.prank(relayer);
+        relayAdapt.relay(args, evil, outputs, alice);
+    }
+
+    function test_relay_revertsWhenOutputOwnerOrOriginSwapped() public {
+        CurtainPool.TransactArgs memory args = _unshieldArgs(50 ether);
+        RelayAdapt.Call[] memory calls = _swapCall(50 ether, 0);
+        _bind(args, calls, _nvdaOutput(111, 0), alice);
+
+        RelayAdapt.ReshieldOutput[] memory stolen = _nvdaOutput(666, 0); // attacker's note key
+        vm.expectRevert(RelayAdapt.RelayDataMismatch.selector);
+        relayAdapt.relay(args, calls, stolen, alice);
+
+        vm.expectRevert(RelayAdapt.RelayDataMismatch.selector);
+        relayAdapt.relay(args, calls, _nvdaOutput(111, 0), relayer); // attacker as origin
+    }
+
+    function test_relay_paysBroadcasterFeeAboveProtocolFee() public {
+        address broadcaster = address(0xB0);
+        CurtainPool.TransactArgs memory args = _unshieldArgs(50 ether);
+        RelayAdapt.Call[] memory calls = _swapCall(50 ether, 0);
+        RelayAdapt.ReshieldOutput[] memory outputs = _nvdaOutput(111, 0);
+        _bind(args, calls, outputs, alice);
+        uint256 protocolFee = args.feeAmount;
+        args.feeAmount = protocolFee + 1 ether;
+        args.feeRecipient = broadcaster;
+
+        uint256 treasuryBefore = usdg.balanceOf(treasury);
+        relayAdapt.relay(args, calls, outputs, alice);
+
+        assertEq(usdg.balanceOf(broadcaster), 1 ether, "broadcaster not paid its fee");
+        assertEq(usdg.balanceOf(treasury) - treasuryBefore, protocolFee, "treasury must get exactly the protocol fee");
+    }
+
+    function test_relay_resetsApprovalsAfterCalls() public {
+        CurtainPool.TransactArgs memory args = _unshieldArgs(50 ether);
+        RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](3);
+        calls[0] = RelayAdapt.Call(address(usdg), 0, abi.encodeCall(IERC20.approve, (address(router), 80 ether)));
+        calls[1] = RelayAdapt.Call(address(router), 0,
+            abi.encodeCall(MockDexRouter.swapExactIn, (address(usdg), address(nvda), 50 ether, 0)));
+        calls[2] = RelayAdapt.Call(address(usdg), 0, abi.encodeCall(IERC20.approve, (address(0xCAFE), 1 ether)));
+        RelayAdapt.ReshieldOutput[] memory outputs = _nvdaOutput(111, 0);
+        _bind(args, calls, outputs, alice);
+
+        relayAdapt.relay(args, calls, outputs, alice);
+
+        assertEq(usdg.allowance(address(relayAdapt), address(router)), 0, "router allowance left open");
+        assertEq(usdg.allowance(address(relayAdapt), address(0xCAFE)), 0, "stray allowance left open");
     }
 }

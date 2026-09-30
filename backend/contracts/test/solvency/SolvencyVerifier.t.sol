@@ -47,9 +47,10 @@ contract SolvencyVerifierTest is Test {
             address(unshieldVer),
             address(0xADA7),
             owner,
+            address(0) /* feeSource */,
             20,
-            20,
-            address(0)
+            address(0),
+            address(0) /* guardian */
         );
 
         mockVerifier = new MockSolvencyVerifier();
