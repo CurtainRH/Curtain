@@ -44,27 +44,36 @@ bun install
 cp .env.example .env
 
 # 4. Run tests
-bun test                 # all TypeScript workspaces
+bun run test:unit        # TypeScript unit tests
+bun test                 # everything, incl. e2e (needs anvil, node, and circuit keys)
 cd contracts && forge test   # contracts
+
+# Local chain with the full stack (Deploy.s.sol needs a high block gas limit on anvil)
+anvil --gas-limit 1000000000
+cd contracts && forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --slow
+forge script script/Pin.s.sol --rpc-url http://127.0.0.1:8545
 ```
 
 ## Milestone status
 
+Code status after the September 2026 spec cross-check (see the root README and git history
+for the fixes). "Built" means implemented and tested locally; nothing is deployed to 4663.
+
 | # | Milestone | Status |
 |---|---|---|
-| M0 | Repo + toolchain + CI | ✅ done |
-| M1 | Stealth v0 | ✅ done |
-| M2 | Circuits | ✅ done |
-| M3 | Pool | ✅ done |
-| M4 | Gate + PPOI | ✅ done |
-| M5 | Wallet SDK + web | ✅ done |
-| M6 | RelayAdapt + recipes v1 | ✅ done |
-| M7 | Broadcasters | ✅ done |
-| M8 | prover-assist | ✅ done |
-| M9 | Morpho / Arcus / Prism recipes | ✅ done |
-| M10 | Disclosure + Solvency | ✅ done |
-| M11 | Staking + fees | ✅ done |
-| M12 | Mainnet | ✅ done |
+| M0 | Repo + toolchain + CI | Built |
+| M1 | Stealth v0 | Built |
+| M2 | Circuits | Built, **dev-scale**: single-contributor ceremony, PPOI SMT depth 32 (spec 160), solvency chunk 4 (spec 4096) |
+| M3 | Pool | Built; fee now enforced on unshield, broadcaster paid from the proof, guardian shield pause |
+| M4 | Gate + PPOI | Built; stale/removed providers excluded, previous-root window; `ppoi-node` service (lists, roots, auto-flagging, witnesses, opt-in proving) |
+| M5 | Wallet SDK + web | Built |
+| M6 | RelayAdapt + recipes v1 | Built; relay calls/outputs/origin now bound into the proof (front-running theft fixed) |
+| M7 | Broadcasters | Built; broadcasters now verify the proof pays them |
+| M8 | prover-assist | Protocol built; attestation is a **mock**, needs real TDX hardware |
+| M9 | Morpho / Arcus / Prism recipes | Built against mocks |
+| M10 | Disclosure + Solvency | Built |
+| M11 | Staking + fees | Built; vote locking, 4% quorum, 24h timelock with multisig veto, fee vote now reaches the pool |
+| M12 | Mainnet | **Not done**: needs the real multi-party ceremony, production circuit parameters, real TDX, token/verifier addresses, then `Deploy.s.sol` + `Pin.s.sol` on 4663 |
 
 ## Copy rules
 

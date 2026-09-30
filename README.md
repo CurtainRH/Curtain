@@ -40,8 +40,9 @@ The privacy system for Robinhood Chain. Shield USDG and tokenized Stock Tokens i
 | Shield | 0.20% |
 | Unshield | 0.20% |
 | Same-tx reshield (RelayAdapt) | Shield fee waived |
+| Broadcaster | Set by each broadcaster (max 0.30%), paid from the proof on top of the protocol fee |
 
-Fee split: 60% to $CRTN stakers, 40% to treasury and prover costs.
+Fee split: 60% to $CRTN stakers, 40% to treasury and prover costs. Governors can move the protocol fee within 0.10–0.30%, through a 24h timelock the multisig can veto.
 
 ## Repo structure
 
@@ -52,8 +53,9 @@ Fee split: 60% to $CRTN stakers, 40% to treasury and prover costs.
 ├─ backend/           Bun workspace
 │  ├─ contracts/      Foundry: pool, gate, adapt, stealth, disclosure, solvency, staking, token
 │  ├─ circuits/       circom: joinsplit, ppoi, solvency, unshield
-│  ├─ packages/       sdk, recipes, verifier
+│  ├─ packages/       sdk, recipes, verifier, db (Postgres access + migrations)
 │  ├─ services/       api, broadcaster, indexer, multiplier-view, ppoi-node, prover-assist, solvency, status
+│  ├─ scripts/        devnet.ts (anvil + Deploy.s.sol for e2e tests)
 │  ├─ apps/web/       wallet web app
 │  ├─ db/migrations/  Postgres migrations (applied by services/api on start)
 │  └─ Dockerfile      @curtain/api image
@@ -89,11 +91,20 @@ Run the API locally with `cd backend/services/api && bun run dev`, then open `GE
 
 ## API
 
+`backend/services/api`, read-only, over the indexer's tables:
+
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/health` | `{ status, timestamp, version }` |
+| GET | `/tokens` | registered tokens, TVL, ERC-8056 multiplier |
+| GET | `/ppoi/status/:commit` | `cleared` \| `flagged` \| `standby` \| `spendable`, `standbyUntil` |
+| GET | `/providers` | list roots, freshness, current standby (15 or 60 min) |
+| GET | `/broadcasters` | bond, fees, failures |
+| GET | `/solvency/latest` | latest finalized epoch per token |
+| GET | `/recipes` | recipe registry |
+| GET | `/stats` | daily activity counts |
 
-Public aggregates only (TVL per token, tx counts, broadcaster stats, provider freshness). No endpoint maps a note to an address, an amount or another note.
+Public aggregates only: no table or endpoint links a note to an address, an amount or another note. Transactions are built in the wallet SDK, which holds the keys.
 
 ## Roadmap
 
