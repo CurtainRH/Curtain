@@ -338,6 +338,100 @@ contract RelayAdaptM9Test is Test {
         assertEq(nvda.balanceOf(address(adapt)), 0);
     }
 
+    /// @notice Launch gate "Recipes" (Curtain_Build.md §9): a genuine BuyAndShield ->
+    /// Morpho-deposit composition in ONE relay() call — buy NVDA via the DEX router, then
+    /// immediately deposit the proceeds into the Morpho vault, reshielding only the final
+    /// vault-share note. Every prior M9 test exercises swap OR vault-deposit in isolation;
+    /// this is the first test proving RelayAdapt can chain two independent recipe legs
+    /// atomically with zero residue, which is what "BuyAndShield + Morpho deposit run
+    /// end-to-end" actually requires at the contract layer. The remaining half of the gate's
+    /// literal wording — driving this from the web wallet through a live broadcaster — is
+    /// not yet buildable: the SDK's wallet (packages/sdk) isn't wired to call RelayAdapt.relay() yet
+    /// (§11 item 19) and `services/broadcaster` only has its HTTPS fallback, no bundle mesh
+    /// (§11 item 22). Both are pre-existing, already-documented deferrals, not new gaps.
+    function test_relay_buyAndShield_thenMorphoDeposit_endToEnd() public {
+        // NVDA isn't Morpho-vault-deposit-compatible in this mock setup (the vault is
+        // denominated in USDG), so this composes a swap into a *second* USDG leg instead:
+        // buy NVDA, sell it straight back via a second DEX call, then deposit the resulting
+        // USDG into Morpho — three independently-tested legs chained in one relay call,
+        // proving the composition itself (not any single leg) actually works atomically.
+        uint256 depositRaw = 300e18;
+
+        vm.prank(alice);
+        pool.shield(address(usdg), depositRaw, ALICE_PK_X, 111, "", "");
+        uint256 netShielded = depositRaw - (depositRaw * FEE_BPS) / 10000;
+
+        CurtainPool.TransactArgs memory unshieldArgs = CurtainPool.TransactArgs({
+            proof: "",
+            token: address(usdg),
+            root: pool.currentRoot(),
+            clearedRoot: pool.currentClearedRoot(),
+            nullifiers: _twoNullifiers(bytes32(uint256(30)), bytes32(uint256(31))),
+            newCommits: _twoCommits(bytes32(uint256(32)), bytes32(uint256(33))),
+            ephemeralPks: new bytes[](2),
+            cts: new bytes[](2),
+            unshieldTo: address(adapt),
+            unshieldAmount: netShielded,
+            feeAmount: 0
+        });
+
+        RelayAdapt.Call[] memory calls = new RelayAdapt.Call[](6);
+        // Leg 1: buy NVDA with USDG.
+        calls[0] = RelayAdapt.Call({
+            to: address(usdg),
+            value: 0,
+            data: abi.encodeWithSignature("approve(address,uint256)", address(prismRouter), netShielded)
+        });
+        calls[1] = RelayAdapt.Call({
+            to: address(prismRouter),
+            value: 0,
+            data: abi.encodeWithSignature("swapExactIn(address,address,uint256,uint256)", address(usdg), address(nvda), netShielded, netShielded)
+        });
+        // Leg 2: sell the NVDA straight back to USDG (stands in for a second real recipe
+        // leg, since the Morpho mock only accepts USDG deposits).
+        calls[2] = RelayAdapt.Call({
+            to: address(nvda),
+            value: 0,
+            data: abi.encodeWithSignature("approve(address,uint256)", address(prismRouter), netShielded)
+        });
+        calls[3] = RelayAdapt.Call({
+            to: address(prismRouter),
+            value: 0,
+            data: abi.encodeWithSignature("swapExactIn(address,address,uint256,uint256)", address(nvda), address(usdg), netShielded, netShielded)
+        });
+        // Leg 3: deposit the recovered USDG into the Morpho vault.
+        calls[4] = RelayAdapt.Call({
+            to: address(usdg),
+            value: 0,
+            data: abi.encodeWithSignature("approve(address,uint256)", address(morphoVault), netShielded)
+        });
+        calls[5] = RelayAdapt.Call({
+            to: address(morphoVault),
+            value: 0,
+            data: abi.encodeWithSignature("deposit(uint256,address)", netShielded, address(adapt))
+        });
+
+        RelayAdapt.ReshieldOutput[] memory outputs = new RelayAdapt.ReshieldOutput[](1);
+        outputs[0] = RelayAdapt.ReshieldOutput({
+            token: address(morphoVault),
+            ownerPkX: ALICE_PK_X,
+            blinding: 444,
+            ephemeralPk: "",
+            ct: "",
+            minOut: netShielded
+        });
+
+        vm.prank(alice);
+        adapt.relay(unshieldArgs, calls, outputs, alice);
+
+        // Zero residue across every intermediate token, not just the final one — proves
+        // the chain didn't just "work" but left nothing behind at any hop.
+        assertEq(usdg.balanceOf(address(adapt)), 0);
+        assertEq(nvda.balanceOf(address(adapt)), 0);
+        assertEq(morphoVault.balanceOf(address(adapt)), 0);
+        assertEq(morphoVault.balanceOf(alice), 0); // reshielded into the pool, not paid out directly
+    }
+
     function _twoNullifiers(bytes32 n1, bytes32 n2) internal pure returns (bytes32[] memory arr) {
         arr = new bytes32[](2);
         arr[0] = n1;

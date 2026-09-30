@@ -10,7 +10,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createPublicClient,
@@ -307,6 +307,13 @@ describe("ppoi-node: clears a shield in < 2 min (M4 acceptance)", () => {
         address: poolAddr, abi: curtainPoolArtifact.abi, functionName: "clearedTreeMember", args: [realCommit],
       })) as boolean;
       expect(isMember).toBe(true);
+
+      // circuitInput above held plaintext owner/amount witness data (rawAmount,
+      // ownerPkX, originAddr) on disk for the subprocess's duration — remove both
+      // temp files now so nothing survives the test run (Curtain_Build.md §9's
+      // Privacy CI gate: "broadcaster/ppoi/prover-assist store nothing post-request").
+      rmSync(inputPath, { force: true });
+      rmSync(outputPath, { force: true });
     },
     300_000, // test-framework timeout for the WHOLE test (deploy + shield + proving);
     // the actual M4 acceptance check is the internal `expect(elapsedMs).toBeLessThan(120_000)`

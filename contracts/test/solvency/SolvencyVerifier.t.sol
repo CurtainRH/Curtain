@@ -63,8 +63,8 @@ contract SolvencyVerifierTest is Test {
         uint256 partialSumChunk0 = 400e18;
         uint256 partialSumChunk1 = 500e18; // Total 900e18 <= 1,000e18 pool balance
 
-        solvencyVerifier.submitChunk(epoch, address(usdg), 0, partialSumChunk0, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
-        solvencyVerifier.submitChunk(epoch, address(usdg), 1, partialSumChunk1, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 2, partialSumChunk0, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+        solvencyVerifier.submitChunk(epoch, address(usdg), 1, 2, partialSumChunk1, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
 
         bool ok = solvencyVerifier.finalizeEpoch(epoch, address(usdg));
         assertTrue(ok);
@@ -80,7 +80,7 @@ contract SolvencyVerifierTest is Test {
         uint256 epoch = 1;
         uint256 partialSum = 1_200e18; // 1,200e18 > 1,000e18 pool balance
 
-        solvencyVerifier.submitChunk(epoch, address(usdg), 0, partialSum, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 1, partialSum, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
 
         vm.expectRevert(abi.encodeWithSelector(SolvencyVerifier.InsolventPool.selector, 1_200e18, 1_000e18));
         solvencyVerifier.finalizeEpoch(epoch, address(usdg));
@@ -91,6 +91,40 @@ contract SolvencyVerifierTest is Test {
         mockVerifier.setShouldPass(false);
 
         vm.expectRevert(SolvencyVerifier.InvalidSolvencyProof.selector);
-        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 100e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 1, 100e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+    }
+
+    function test_finalizeEpoch_revertsWhenChunksIncomplete() public {
+        uint256 epoch = 1;
+        // Declares a 2-chunk epoch but only submits chunk 0 — the pool's true total
+        // (900e18, well within the 1,000e18 balance) would look solvent if finalized
+        // early, masking whatever the missing chunk actually contains.
+        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 2, 400e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+
+        vm.expectRevert(abi.encodeWithSelector(SolvencyVerifier.EpochIncomplete.selector, uint32(1), uint32(2)));
+        solvencyVerifier.finalizeEpoch(epoch, address(usdg));
+    }
+
+    function test_finalizeEpoch_revertsWhenNoChunksSubmitted() public {
+        vm.expectRevert(SolvencyVerifier.NoChunksSubmitted.selector);
+        solvencyVerifier.finalizeEpoch(1, address(usdg));
+    }
+
+    function test_submitChunk_revertsOnTotalChunksMismatch() public {
+        uint256 epoch = 1;
+        solvencyVerifier.submitChunk(epoch, address(usdg), 0, 2, 400e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+
+        vm.expectRevert(SolvencyVerifier.TotalChunksMismatch.selector);
+        solvencyVerifier.submitChunk(epoch, address(usdg), 1, 3, 500e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+    }
+
+    function test_submitChunk_revertsOnChunkIndexOutOfRange() public {
+        vm.expectRevert(SolvencyVerifier.ChunkIndexOutOfRange.selector);
+        solvencyVerifier.submitChunk(1, address(usdg), 2, 2, 400e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
+    }
+
+    function test_submitChunk_revertsOnZeroTotalChunks() public {
+        vm.expectRevert(SolvencyVerifier.InvalidTotalChunks.selector);
+        solvencyVerifier.submitChunk(1, address(usdg), 0, 0, 400e18, bytes32(uint256(1)), bytes32(uint256(2)), hex"1234");
     }
 }

@@ -17,7 +17,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EnclaveSession, verifyAttestation, MOCK_ROOT_PUBLIC_KEY, type AttestationDocument } from "../src";
@@ -125,6 +125,14 @@ describe("prover-assist: attestation, blinded proving, leak harness (M8 acceptan
         const vkey = JSON.parse(readFileSync(join(CIRCUITS_BUILD, "unshield", "verification_key.json"), "utf-8"));
         const ok = verifyGroth16InSubprocess(vkey, proof.publicSignals, proof.proof);
         expect(ok).toBe(true);
+
+        // Leak check #3: prover.ts writes the plaintext witness to a
+        // curtain-prover-assist-* temp dir for the proving subprocess's
+        // duration and rmSync's it in a `finally` — confirm nothing from
+        // that dir (or its plaintext contents) survives the request, since
+        // the in-memory/response-body checks above can't see the filesystem.
+        const leftoverProverDirs = readdirSync(tmpdir()).filter((name) => name.startsWith("curtain-prover-assist-"));
+        expect(leftoverProverDirs).toEqual([]);
 
         // M8 acceptance bar: "Mobile proof < 10s p95" — this measures the
         // server-side prove step (network+client time is separate and
