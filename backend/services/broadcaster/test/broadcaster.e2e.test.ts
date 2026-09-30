@@ -22,6 +22,7 @@ import {
   createPublicClient, createWalletClient, defineChain, encodeFunctionData, http, keccak256,
   parseEther, toBytes, type Address, type Hex,
 } from "viem";
+import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { BroadcasterNode, NotYetAssignableError } from "../src/node";
 import { computeAssignee } from "../src/assignment";
@@ -130,7 +131,10 @@ describe("broadcaster: assignment, censorship fallback, slash (M7 acceptance)", 
       const transferAmount = parseEther("10");
       const bundle: Bundle = {
         chainId: 31337,
-        kind: "transact",
+        // A fee-free kind: this test is about assignment + the censorship fallback, and its
+        // "bundle" is a plain ERC-20 transfer, not a real proof. Proof-bound fee checks for
+        // transact/relay are covered in test/fee-check.test.ts.
+        kind: "unshieldToOrigin",
         to: tokenAddr,
         calldata: encodeFunctionData({ abi: TRANSFER_ABI, functionName: "transfer", args: [recipient!, transferAmount] }),
         feeToken: tokenAddr,
@@ -156,7 +160,7 @@ describe("broadcaster: assignment, censorship fallback, slash (M7 acceptance)", 
       const makeNode = (address: Address) => {
         const walletClient = createWalletClient({ account: address, chain: anvilChain, transport: http() });
         return new BroadcasterNode(
-          { address, feeSchedule: new Map([[tokenAddr, 0n]]), assignmentWindowMs: ASSIGNMENT_WINDOW_MS },
+          { address, feeSchedule: new Map([[tokenAddr, 0n]]), assignmentWindowMs: ASSIGNMENT_WINDOW_MS, poolAddress: zeroAddress, relayAddress: zeroAddress },
           publicClient, walletClient,
           async () => (await publicClient.readContract({ address: bondAddr, abi: bondAbi, functionName: "bondedBroadcasters" })) as Address[],
         );

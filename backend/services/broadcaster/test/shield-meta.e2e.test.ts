@@ -97,8 +97,9 @@ describe("broadcaster: shieldMeta (gasless shield via ERC2771Forwarder)", () => 
         hasherT3, hasherT5, assetGateAddr, screeningGateAddr,
         joinSplitMockAddr, joinSplitMockAddr, unshieldMockAddr,
         "0x0000000000000000000000000000000000000000",
-        deployer, 20, 20,
+        deployer, "0x0000000000000000000000000000000000000000", 20, // treasury, fee source (none), default fee
         forwarderAddr,
+        "0x0000000000000000000000000000000000000000", // no guardian
       ]);
 
       const erc20Artifact = loadArtifact("MockERC20");
@@ -183,7 +184,7 @@ describe("broadcaster: shieldMeta (gasless shield via ERC2771Forwarder)", () => 
       };
 
       const broadcasterNode = new BroadcasterNode(
-        { address: broadcasterAddr!, feeSchedule: new Map(), assignmentWindowMs: 10 * 60 * 1000 },
+        { address: broadcasterAddr!, feeSchedule: new Map(), assignmentWindowMs: 10 * 60 * 1000, poolAddress: poolAddr, relayAddress: poolAddr },
         publicClient,
         broadcasterClient,
         async () => [broadcasterAddr!],

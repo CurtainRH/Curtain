@@ -104,8 +104,9 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
         hasherT3, hasherT5, assetGateAddr, screeningGateAddr,
         joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
         predictedRelayAdapt,
-        deployer, 20, 20,
+        deployer, "0x0000000000000000000000000000000000000000", 20, // treasury, fee source (none), default fee
         "0x0000000000000000000000000000000000000000", // no meta-tx forwarder in this test
+        "0x0000000000000000000000000000000000000000", // no guardian
       ]);
 
       const relayArtifact = loadArtifact("RelayAdapt");
@@ -149,6 +150,8 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
       expect(aliceNotes.length).toBe(2);
       const [input1, input2] = aliceNotes as [OwnedNote, OwnedNote];
       const totalIn = input1.rawAmount + input2.rawAmount;
+      // Largest unshield U with U + protocolFee(U) <= totalIn (fee is 20 bps at the default).
+      const amount = (totalIn * 10000n) / 10020n;
 
       // ---- relay: unshield full amount to RelayAdapt -> swap USDG->NVDA -> reshield NVDA ----
       const approveCall = {
@@ -157,7 +160,7 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
         data: (await import("viem")).encodeFunctionData({
           abi: erc20Artifact.abi,
           functionName: "approve",
-          args: [dexAddr, totalIn],
+          args: [dexAddr, amount],
         }),
       };
       const swapCall = {
@@ -166,16 +169,16 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
         data: (await import("viem")).encodeFunctionData({
           abi: dexArtifact.abi,
           functionName: "swapExactIn",
-          args: [usdgAddr, nvdaAddr, totalIn, totalIn],
+          args: [usdgAddr, nvdaAddr, amount, amount],
         }),
       };
 
       await aliceWallet.relay(
         usdgAddr,
         [input1, input2],
-        totalIn, // no change — full input relayed through
+        amount, // leaves room for the pool's enforced 0.20% unshield fee; the dust is a change note
         [approveCall, swapCall],
-        [{ token: nvdaAddr, expectedAmount: totalIn, minOut: totalIn, toEkX: aliceKeys.ekX, toEkY: aliceKeys.ekY, toPkX: aliceKeys.pkX }],
+        [{ token: nvdaAddr, expectedAmount: amount, minOut: amount, toEkX: aliceKeys.ekX, toEkY: aliceKeys.ekY, toPkX: aliceKeys.pkX }],
         alice!,
       );
 
@@ -184,7 +187,7 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
       const nvdaTokenId = (await publicClient.readContract({ address: poolAddr, abi: poolArtifact.abi, functionName: "tokenIdOf", args: [nvdaAddr] })) as bigint;
       const reshielded = aliceNotesAfter.find((n) => n.tokenId === nvdaTokenId);
       expect(reshielded).toBeDefined();
-      expect(reshielded!.rawAmount).toBe(totalIn);
+      expect(reshielded!.rawAmount).toBe(amount);
 
       const relayAdaptNvdaBalance = (await publicClient.readContract({ address: nvdaAddr, abi: erc20Artifact.abi, functionName: "balanceOf", args: [relayAddr] })) as bigint;
       const relayAdaptUsdgBalance = (await publicClient.readContract({ address: usdgAddr, abi: erc20Artifact.abi, functionName: "balanceOf", args: [relayAddr] })) as bigint;
@@ -192,7 +195,7 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
       expect(relayAdaptUsdgBalance).toBe(0n);
 
       const poolNvdaBalance = (await publicClient.readContract({ address: nvdaAddr, abi: erc20Artifact.abi, functionName: "balanceOf", args: [poolAddr] })) as bigint;
-      expect(poolNvdaBalance).toBe(totalIn);
+      expect(poolNvdaBalance).toBe(amount);
     },
     120_000,
   );

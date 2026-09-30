@@ -94,8 +94,9 @@ describe("ProverAssistBackend: browser-safe proving via a real prover-assist ser
         hasherT3, hasherT5, assetGateAddr, screeningGateAddr,
         joinSplitMockAddr, joinSplitMockAddr, unshieldAdapterAddr,
         "0x0000000000000000000000000000000000000000",
-        deployer, 20, 20,
+        deployer, "0x0000000000000000000000000000000000000000", 20, // treasury, fee source (none), default fee
         "0x0000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000", // no guardian
       ]);
 
       const erc20Artifact = loadArtifact("MockERC20");

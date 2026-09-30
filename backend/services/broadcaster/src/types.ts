@@ -46,4 +46,9 @@ export interface BroadcasterConfig {
   feeSchedule: Map<Address, bigint>;
   /** How long (ms) an assignee gets before any other broadcaster may submit — 10 min per spec. */
   assignmentWindowMs: number;
+  /** CurtainPool — `transact` bundles must target it; its `protocolFeeFor()` is read to work
+   * out how much of a proof's `feeAmount` is this broadcaster's. */
+  poolAddress: Address;
+  /** RelayAdapt — `relay` bundles must target it. */
+  relayAddress: Address;
 }

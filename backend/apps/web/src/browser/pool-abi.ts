@@ -38,6 +38,8 @@ export const poolAbi = [
         { name: "feeAmount", type: "uint256" },
         { name: "ephemeralPks", type: "bytes[]" },
         { name: "cts", type: "bytes[]" },
+        { name: "feeRecipient", type: "address" },
+        { name: "extData", type: "bytes32" },
       ],
     }],
     outputs: [],
@@ -59,8 +61,8 @@ export const poolAbi = [
   { type: "function", name: "currentClearedRoot", stateMutability: "view", inputs: [], outputs: [{ type: "bytes32" }] },
   { type: "function", name: "tokenIdOf", stateMutability: "pure", inputs: [{ name: "token", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "originOf", stateMutability: "view", inputs: [{ name: "commit", type: "bytes32" }], outputs: [{ type: "address" }] },
-  { type: "function", name: "feeBpsShield", stateMutability: "view", inputs: [], outputs: [{ type: "uint16" }] },
-  { type: "function", name: "feeBpsUnshield", stateMutability: "view", inputs: [], outputs: [{ type: "uint16" }] },
+  { type: "function", name: "feeBps", stateMutability: "view", inputs: [], outputs: [{ type: "uint16" }] },
+  { type: "function", name: "protocolFeeFor", stateMutability: "view", inputs: [{ name: "unshieldAmount", type: "uint256" }], outputs: [{ type: "uint256" }] },
   {
     type: "event", name: "Shield",
     inputs: [

@@ -103,8 +103,8 @@ export class CurtainWallet {
     // the raw amount passed in — the note's encrypted plaintext (and the
     // OwnedNote this method returns) must match that exactly, or sync()'s
     // commitment recheck will never match and silently drop the note.
-    const feeBpsShield = (await publicClient.readContract({ address: poolAddress, abi: poolAbi, functionName: "feeBpsShield" })) as number;
-    const netAmount = rawAmount - (rawAmount * BigInt(feeBpsShield)) / 10000n;
+    const feeBps = (await publicClient.readContract({ address: poolAddress, abi: poolAbi, functionName: "feeBps" })) as number;
+    const netAmount = rawAmount - (rawAmount * BigInt(feeBps)) / 10000n;
 
     const { ephemeralPk, ct } = await encryptNoteTo(keys.ekX, keys.ekY, { tokenId, rawAmount: netAmount, blinding });
 
@@ -267,14 +267,10 @@ export class CurtainWallet {
     const inPaths = await Promise.all(inputs.map((n) => mainTree.pathTo(n.leafIndex!)));
     const inClearedPaths = await Promise.all(inputs.map((n) => clearedTree.pathTo(n.clearedLeafIndex!)));
 
-    // Must match CurtainPool.sol's `_extDataHash` exactly (keccak256(abi.encode(
-    // unshieldTo, unshieldAmount, feeAmount)) % FIELD_SIZE) — the contract
-    // recomputes this itself and feeds it into the SAME public-signal slot the
-    // circuit committed to, so a mismatch here makes an otherwise-valid proof
-    // fail verification on-chain (it still passes an isolated snarkjs.verify()
-    // check, since that only checks internal consistency, not this binding).
-    const zeroAddress: Address = "0x0000000000000000000000000000000000000000";
-    const extDataHash = BigInt(keccak256(encodeAbiParameters(parseAbiParameters("address, uint256, uint256"), [zeroAddress, 0n, 0n]))) % FIELD_SIZE;
+    // Must match CurtainPool.sol's `_extDataHash` exactly — see computeExtDataHash(). The
+    // contract recomputes it and feeds it into the same public-signal slot the circuit
+    // committed to, so a mismatch makes an otherwise-valid proof fail on-chain.
+    const extDataHash = computeExtDataHash({ unshieldTo: ZERO_ADDRESS, unshieldAmount: 0n, feeAmount: 0n, feeRecipient: ZERO_ADDRESS, extData: ZERO_BYTES32 });
 
     const circuitInput = {
       root: root.toString(),
@@ -313,11 +309,13 @@ export class CurtainWallet {
       clearedRoot: `0x${clearedRoot.toString(16).padStart(64, "0")}` as Hex,
       nullifiers: nullifiers.map((n) => `0x${n.toString(16).padStart(64, "0")}` as Hex),
       newCommits: realCommitments.map((n) => `0x${n.toString(16).padStart(64, "0")}` as Hex),
-      unshieldTo: "0x0000000000000000000000000000000000000000" as Address,
+      unshieldTo: ZERO_ADDRESS,
       unshieldAmount: 0n,
       feeAmount: 0n,
       ephemeralPks: ciphertexts.map((c) => c.ephemeralPk),
       cts: ciphertexts.map((c) => c.ct),
+      feeRecipient: ZERO_ADDRESS,
+      extData: ZERO_BYTES32,
     };
 
     const hash = await walletClient.writeContract({
@@ -348,6 +346,10 @@ export class CurtainWallet {
    * Reshielded outputs land back in the pool via CurtainPool.reshield() (called by
    * RelayAdapt, not this method) and are `sync()`-recoverable exactly like a plain shield()
    * note — no special-case detection needed on this class's side.
+   *
+   * The proof binds the calls, reshield outputs and origin (via RelayAdapt.relayDataHash in
+   * `extData`) and pays the pool's unshield fee, plus `broadcasterFee` to `feeRecipient` if
+   * given. Change is `sumIn - unshieldAmount - feeAmount`.
    */
   async relay(
     token: Address,
@@ -356,8 +358,9 @@ export class CurtainWallet {
     relayCalls: RelayCall[],
     reshieldOutputs: RelayOutputSpec[],
     origin: Address,
+    broadcaster: { feeRecipient: Address; broadcasterFee: bigint } = { feeRecipient: ZERO_ADDRESS, broadcasterFee: 0n },
   ): Promise<void> {
-    const { publicClient, walletClient, account, poolAbi, keys, joinsplit2x2, relayAddress, relayAbi } = this.cfg;
+    const { publicClient, walletClient, account, poolAddress, poolAbi, keys, joinsplit2x2, relayAddress, relayAbi } = this.cfg;
     if (!relayAddress || !relayAbi) throw new Error("relay: CurtainWalletConfig.relayAddress/relayAbi must be set to use relay()");
 
     for (const n of inputs) {
@@ -366,8 +369,14 @@ export class CurtainWallet {
     }
     const tokenId = tokenIdOf(token);
     const sumIn = inputs[0].rawAmount + inputs[1].rawAmount;
-    if (unshieldAmount > sumIn) throw new Error(`relay: unshieldAmount (${unshieldAmount}) exceeds input notes' total (${sumIn})`);
-    const changeAmount = sumIn - unshieldAmount;
+    const protocolFee = (await publicClient.readContract({
+      address: poolAddress, abi: poolAbi, functionName: "protocolFeeFor", args: [unshieldAmount],
+    })) as bigint;
+    const feeAmount = protocolFee + broadcaster.broadcasterFee;
+    if (unshieldAmount + feeAmount > sumIn) {
+      throw new Error(`relay: unshieldAmount + fees (${unshieldAmount + feeAmount}) exceeds input notes' total (${sumIn})`);
+    }
+    const changeAmount = sumIn - unshieldAmount - feeAmount;
 
     // Verify every call target is actually allowlisted before spending gas on a proof —
     // RelayAdapt would revert with TargetNotAllowed anyway, but only after the unshield leg
@@ -376,6 +385,17 @@ export class CurtainWallet {
       const allowed = (await publicClient.readContract({ address: relayAddress, abi: relayAbi, functionName: "allowedTarget", args: [call.to] })) as boolean;
       if (!allowed) throw new Error(`relay: target ${call.to} is not allowlisted on RelayAdapt`);
     }
+
+    const relayOutputArgs = await Promise.all(
+      reshieldOutputs.map(async (o) => {
+        const blinding = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) + 1n;
+        const { ephemeralPk, ct } = await encryptNoteTo(o.toEkX, o.toEkY, { tokenId: tokenIdOf(o.token), rawAmount: o.expectedAmount, blinding });
+        return { token: o.token, ownerPkX: o.toPkX, blinding, ephemeralPk, ct, minOut: o.minOut };
+      }),
+    );
+    const extData = (await publicClient.readContract({
+      address: relayAddress, abi: relayAbi, functionName: "relayDataHash", args: [relayCalls, relayOutputArgs, origin],
+    })) as Hex;
 
     const { mainTree, clearedTree } = await this.buildTrees();
     const root = await mainTree.root();
@@ -396,10 +416,10 @@ export class CurtainWallet {
     const inPaths = await Promise.all(inputs.map((n) => mainTree.pathTo(n.leafIndex!)));
     const inClearedPaths = await Promise.all(inputs.map((n) => clearedTree.pathTo(n.clearedLeafIndex!)));
 
-    // Must match CurtainPool.sol's `_extDataHash` exactly — see send()'s identical comment.
-    const feeAmount = 0n; // RelayAdapt has no fee mechanism yet — see its header, deviation 2.
-    const extDataHash =
-      BigInt(keccak256(encodeAbiParameters(parseAbiParameters("address, uint256, uint256"), [relayAddress, unshieldAmount, feeAmount]))) % FIELD_SIZE;
+    // Must match CurtainPool.sol's `_extDataHash` exactly — see computeExtDataHash().
+    const extDataHash = computeExtDataHash({
+      unshieldTo: relayAddress, unshieldAmount, feeAmount, feeRecipient: broadcaster.feeRecipient, extData,
+    });
 
     const circuitInput = {
       root: root.toString(),
@@ -447,15 +467,9 @@ export class CurtainWallet {
       feeAmount,
       ephemeralPks: ciphertexts.map((ct) => ct.ephemeralPk),
       cts: ciphertexts.map((ct) => ct.ct),
+      feeRecipient: broadcaster.feeRecipient,
+      extData,
     };
-
-    const relayOutputArgs = await Promise.all(
-      reshieldOutputs.map(async (o) => {
-        const blinding = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) + 1n;
-        const { ephemeralPk, ct } = await encryptNoteTo(o.toEkX, o.toEkY, { tokenId: tokenIdOf(o.token), rawAmount: o.expectedAmount, blinding });
-        return { token: o.token, ownerPkX: o.toPkX, blinding, ephemeralPk, ct, minOut: o.minOut };
-      }),
-    );
 
     const hash = await walletClient.writeContract({
       chain: walletClient.chain,
@@ -503,6 +517,28 @@ export class CurtainWallet {
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new Error("unshieldToOrigin: transaction reverted");
   }
+}
+
+const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
+const ZERO_BYTES32: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+/**
+ * The join-split proof's `extDataHash` public signal, exactly as CurtainPool.sol's
+ * `_extDataHash` computes it: keccak256(abi.encode(unshieldTo, unshieldAmount, feeAmount,
+ * feeRecipient, extData)) mod the BN254 field. Binding feeRecipient and extData (RelayAdapt's
+ * calls/outputs/origin hash) stops a proof being replayed with different ones.
+ */
+export function computeExtDataHash(e: {
+  unshieldTo: Address;
+  unshieldAmount: bigint;
+  feeAmount: bigint;
+  feeRecipient: Address;
+  extData: Hex;
+}): bigint {
+  const encoded = encodeAbiParameters(parseAbiParameters("address, uint256, uint256, address, bytes32"), [
+    e.unshieldTo, e.unshieldAmount, e.feeAmount, e.feeRecipient, e.extData,
+  ]);
+  return BigInt(keccak256(encoded)) % FIELD_SIZE;
 }
 
 function encodeGroth16Proof(a: [string, string], b: [[string, string], [string, string]], c: [string, string]): Hex {
