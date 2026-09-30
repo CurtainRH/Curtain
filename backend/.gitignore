@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+# NOTE: bun.lock is intentionally committed for reproducible installs
+# (CI runs `bun install --frozen-lockfile`).
+
+# Build output
+dist/
+out/
+*.tsbuildinfo
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/*/31337/
+!contracts/lib/forge-std/
+
+# Circuits — heavy, regeneratable ZK artifacts (ptau/zkey/r1cs/wasm can run
+# into the hundreds of MB and would blow past GitHub's file-size limits).
+# Regenerate via circuits/scripts/{ceremony,ceremony-resume}.sh. Small,
+# non-regeneratable-by-hash outputs (verification keys, test vectors, the
+# ceremony transcript) are committed.
+circuits/node_modules/
+circuits/build/ptau/
+circuits/build/**/*.r1cs
+circuits/build/**/*.zkey
+circuits/build/**/*.sym
+circuits/build/**/*_js/
+circuits/build/**/Verifier.sol
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+docs/Curtain_Git.md
+
+# Local dev tools (downloaded binaries, not vendored)
+.tools/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage
+coverage/
+
+# Runtime scratch files (proof-gen subprocess I/O)
+services/ppoi-node/test/.tmp-*.json
