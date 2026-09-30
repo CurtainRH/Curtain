@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { deriveWalletKeys, generateSeed, generateWalletKeys, getBabyJub } from "../src/keys";
+import {
+  deriveWalletKeys,
+  generateSeed,
+  generateWalletKeys,
+  generateWalletKeysWithMnemonic,
+  getBabyJub,
+  mnemonicFromSeed,
+  recoverWalletKeysFromMnemonic,
+  seedFromMnemonic,
+} from "../src/keys";
 
 describe("wallet keys (Baby Jubjub spending/viewing keys)", () => {
   it("derives the same keys from the same seed (deterministic)", async () => {
@@ -35,5 +44,46 @@ describe("wallet keys (Baby Jubjub spending/viewing keys)", () => {
     const { keys } = await generateWalletKeys();
     const point = babyJub.mulPointEscalar(babyJub.Base8, keys.sk);
     expect(babyJub.F.toObject(point[0])).toBe(keys.pkX);
+  });
+});
+
+describe("mnemonic (BIP-39) backup/recovery", () => {
+  it("round-trips a seed through mnemonicFromSeed/seedFromMnemonic unchanged", () => {
+    const seed = generateSeed();
+    const mnemonic = mnemonicFromSeed(seed);
+    expect(mnemonic.split(" ")).toHaveLength(24);
+    const recovered = seedFromMnemonic(mnemonic);
+    expect(recovered).toEqual(seed);
+  });
+
+  it("recovers the exact same wallet keys from a mnemonic as from the original seed", async () => {
+    const { seed, mnemonic, keys } = await generateWalletKeysWithMnemonic();
+    const { seed: recoveredSeed, keys: recoveredKeys } = await recoverWalletKeysFromMnemonic(mnemonic);
+    expect(recoveredSeed).toEqual(seed);
+    expect(recoveredKeys).toEqual(keys);
+  });
+
+  it("accepts a mnemonic typed with extra whitespace or different casing", async () => {
+    const { mnemonic, keys } = await generateWalletKeysWithMnemonic();
+    const messy = `  ${mnemonic.split(" ").map((w, i) => (i % 2 === 0 ? w.toUpperCase() : w)).join("   ")}  `;
+    const { keys: recoveredKeys } = await recoverWalletKeysFromMnemonic(messy);
+    expect(recoveredKeys).toEqual(keys);
+  });
+
+  it("rejects a mnemonic with an invalid checksum", () => {
+    const { mnemonic } = { mnemonic: mnemonicFromSeed(generateSeed()) };
+    const words = mnemonic.split(" ");
+    // Swap the last word for a different valid wordlist entry — extremely likely to break
+    // the BIP-39 checksum (the last word encodes checksum bits, not just entropy).
+    words[words.length - 1] = words[words.length - 1] === "zoo" ? "abandon" : "zoo";
+    const tampered = words.join(" ");
+    expect(() => seedFromMnemonic(tampered)).toThrow();
+  });
+
+  it("rejects a mnemonic containing a word outside the BIP-39 wordlist", () => {
+    const mnemonic = mnemonicFromSeed(generateSeed());
+    const words = mnemonic.split(" ");
+    words[0] = "notarealbip39word";
+    expect(() => seedFromMnemonic(words.join(" "))).toThrow();
   });
 });

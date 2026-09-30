@@ -12,6 +12,8 @@ import { buildBabyjub, buildPoseidon } from "circomlibjs";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
+import { entropyToMnemonic, mnemonicToEntropy, validateMnemonic } from "@scure/bip39";
+import { wordlist } from "@scure/bip39/wordlists/english.js";
 
 const HKDF_INFO = new TextEncoder().encode("curtain/spend/v1");
 
@@ -40,9 +42,52 @@ function getPoseidon() {
   return poseidonPromise;
 }
 
-/** Generates a fresh 32-byte seed. Mnemonic (BIP-39) import/export is deferred — see Curtain_Build.md §11. */
+/** Generates a fresh 32-byte seed. */
 export function generateSeed(): Uint8Array {
   return randomBytes(32);
+}
+
+/** Number of mnemonic words a 32-byte seed encodes as, per BIP-39 (256 bits of entropy -> 24 words). */
+export const MNEMONIC_WORD_COUNT = 24;
+
+/**
+ * Encodes a wallet's 32-byte seed as a 24-word BIP-39 mnemonic, for backup/recovery.
+ *
+ * This is a direct, reversible entropy<->mnemonic encoding (no PBKDF2 stretching, no
+ * passphrase) — the seed IS the entropy, and `deriveWalletKeys` already does its own
+ * HKDF-SHA256 stretching from that seed. Adding BIP-39's standard PBKDF2 seed-derivation
+ * on top would just be a second, redundant KDF pass with its own passphrase UX to design
+ * around, for no real security benefit over the existing HKDF step.
+ */
+export function mnemonicFromSeed(seed: Uint8Array): string {
+  if (seed.length !== 32) {
+    throw new Error(`mnemonicFromSeed: expected a 32-byte seed, got ${seed.length} bytes`);
+  }
+  return entropyToMnemonic(seed, wordlist);
+}
+
+/** Decodes a 24-word BIP-39 mnemonic back into the original 32-byte wallet seed. */
+export function seedFromMnemonic(mnemonic: string): Uint8Array {
+  const normalized = mnemonic.trim().toLowerCase().split(/\s+/).join(" ");
+  if (!validateMnemonic(normalized, wordlist)) {
+    throw new Error("seedFromMnemonic: invalid mnemonic (bad word, wrong length, or checksum failure)");
+  }
+  return mnemonicToEntropy(normalized, wordlist);
+}
+
+/** Convenience: generates a fresh seed, its 24-word mnemonic backup, and derives its keys in one call. */
+export async function generateWalletKeysWithMnemonic(): Promise<{ seed: Uint8Array; mnemonic: string; keys: WalletKeys }> {
+  const seed = generateSeed();
+  const mnemonic = mnemonicFromSeed(seed);
+  const keys = await deriveWalletKeys(seed);
+  return { seed, mnemonic, keys };
+}
+
+/** Recovers a wallet's seed and full key set from its 24-word mnemonic backup. */
+export async function recoverWalletKeysFromMnemonic(mnemonic: string): Promise<{ seed: Uint8Array; keys: WalletKeys }> {
+  const seed = seedFromMnemonic(mnemonic);
+  const keys = await deriveWalletKeys(seed);
+  return { seed, keys };
 }
 
 /** Derives the wallet's full key set from a seed via HKDF, per Curtain_Build.md §5. */

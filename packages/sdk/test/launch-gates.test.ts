@@ -209,11 +209,14 @@ describe("Mainnet Launch Gates (TypeScript Compliance) — Curtain_Build.md §9"
 
   it.todo(
     "Recipes: BuyAndShield + Morpho deposit end-to-end from the web wallet with a broadcaster — " +
-      "blocked on the SDK wallet not yet calling RelayAdapt.relay() (Curtain_Build.md §11 item 19) " +
-      "and services/broadcaster having no bundle mesh, HTTPS fallback only (§11 item 22). The " +
-      "contract-layer half of this gate (buy -> deposit chained atomically in one relay() call, " +
-      "zero residue) IS covered: see contracts/test/adapt/RelayAdaptM9.t.sol's " +
-      "test_relay_buyAndShield_thenMorphoDeposit_endToEnd.",
+      "CurtainWallet.relay() now exists (pool-client.ts) and proves/submits a real relay through " +
+      "a real join-split proof, and apps/web can call it, but there is still no live broadcaster " +
+      "bundle mesh to route through (services/broadcaster has HTTPS fallback only, §11 item 22) " +
+      "and this hasn't been run against a real deployed chain end-to-end yet. The contract-layer " +
+      "half (buy -> deposit chained atomically in one relay() call, zero residue) IS covered: see " +
+      "contracts/test/adapt/RelayAdaptM9.t.sol's test_relay_buyAndShield_thenMorphoDeposit_endToEnd. " +
+      "The SDK-layer half is covered by packages/sdk/test/wallet-relay.e2e.test.ts.",
+    () => {},
   );
 
   it("OPSEC: .env.example declares RPC/chain/deployment config with no live secrets committed", () => {
@@ -249,5 +252,6 @@ describe("Mainnet Launch Gates (TypeScript Compliance) — Curtain_Build.md §9"
       "prose only. Genuinely testable once a real deploy produces deployments/4663.json and " +
       "apps/web ships actual branding/hosting config — fabricating a pass here now would be " +
       "exactly the theater-test problem this rewrite exists to remove.",
+    () => {},
   );
 });
