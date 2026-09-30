@@ -1,9 +1,10 @@
 /**
- * @curtain/indexer — Indexes on-chain Curtain events into Postgres for api/status
- * Milestone: M0 scaffold. Implementation lands in later milestones per Curtain_Build.md.
+ * @curtain/indexer — chain -> Postgres indexer for public aggregates. See indexer.ts.
  */
 export const name = "indexer" as const;
 
 export function ready(): boolean {
   return true;
 }
+
+export * from "./indexer";

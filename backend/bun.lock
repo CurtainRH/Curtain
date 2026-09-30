@@ -7,6 +7,7 @@
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.6.3",
+        "viem": "^2.57.0",
       },
     },
     "apps/web": {
@@ -22,6 +23,14 @@
       "devDependencies": {
         "typescript": "^5.6.3",
         "vite": "^8.3.1",
+      },
+    },
+    "packages/db": {
+      "name": "@curtain/db",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@electric-sql/pglite": "^0.3.0",
+        "typescript": "^5.6.3",
       },
     },
     "packages/recipes": {
@@ -60,7 +69,11 @@
     "services/api": {
       "name": "@curtain/api",
       "version": "0.0.1",
+      "dependencies": {
+        "@curtain/db": "workspace:*",
+      },
       "devDependencies": {
+        "@electric-sql/pglite": "^0.3.0",
         "typescript": "^5.6.3",
       },
     },
@@ -85,7 +98,12 @@
     "services/indexer": {
       "name": "@curtain/indexer",
       "version": "0.0.1",
+      "dependencies": {
+        "@curtain/db": "workspace:*",
+        "viem": "^2.57.0",
+      },
       "devDependencies": {
+        "@electric-sql/pglite": "^0.3.0",
         "typescript": "^5.6.3",
       },
     },
@@ -161,6 +179,8 @@
 
     "@curtain/broadcaster": ["@curtain/broadcaster@workspace:services/broadcaster"],
 
+    "@curtain/db": ["@curtain/db@workspace:packages/db"],
+
     "@curtain/indexer": ["@curtain/indexer@workspace:services/indexer"],
 
     "@curtain/multiplier-view": ["@curtain/multiplier-view@workspace:services/multiplier-view"],
@@ -182,6 +202,8 @@
     "@curtain/web": ["@curtain/web@workspace:apps/web"],
 
     "@dnsquery/dns-packet": ["@dnsquery/dns-packet@6.1.1", "", { "dependencies": { "@leichtgewicht/ip-codec": "^2.0.4", "utf8-codec": "^1.0.0" } }, "sha512-WXTuFvL3G+74SchFAtz3FgIYVOe196ycvGsMgvSH/8Goptb1qpIQtIuM4SOK9G9lhMWYpHxnXyy544ZhluFOew=="],
+
+    "@electric-sql/pglite": ["@electric-sql/pglite@0.3.16", "", {}, "sha512-mZkZfOd9OqTMHsK+1cje8OSzfAQcpD7JmILXTl5ahdempjUDdmg4euf1biDex5/LfQIDJ3gvCu6qDgdnDxfJmA=="],
 
     "@ethersproject/abi": ["@ethersproject/abi@5.8.0", "", { "dependencies": { "@ethersproject/address": "^5.8.0", "@ethersproject/bignumber": "^5.8.0", "@ethersproject/bytes": "^5.8.0", "@ethersproject/constants": "^5.8.0", "@ethersproject/hash": "^5.8.0", "@ethersproject/keccak256": "^5.8.0", "@ethersproject/logger": "^5.8.0", "@ethersproject/properties": "^5.8.0", "@ethersproject/strings": "^5.8.0" } }, "sha512-b9YS/43ObplgyV6SlyQsG53/vkSal0MNA1fskSC4mbnCMi8R+NkcH8K9FPYNESf6jUefBUniE4SOKms0E/KK1Q=="],
 

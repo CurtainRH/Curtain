@@ -2,7 +2,7 @@
   "name": "curtain",
   "private": true,
   "version": "0.0.1",
-  "description": "Curtain ($CRTN) \u2014 privacy system for Robinhood Chain",
+  "description": "Curtain ($CRTN) — privacy system for Robinhood Chain",
   "workspaces": [
     "packages/*",
     "services/*",
@@ -18,7 +18,8 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "viem": "^2.57.0"
   },
   "engines": {
     "bun": ">=1.4.0"

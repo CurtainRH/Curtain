@@ -1,0 +1,21 @@
+{
+  "name": "@curtain/db",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Postgres access + migrations shared by api and indexer",
+  "type": "module",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pglite": "./src/pglite.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,9 +1,13 @@
 /**
- * @curtain/ppoi-node — Builds blinded non-membership PPOI proofs against provider lists, calls ppoiVerify
- * Milestone: M0 scaffold. Implementation lands in later milestones per Curtain_Build.md.
+ * @curtain/ppoi-node — provider list trees, root publishing, automatic flagging of listed
+ * origins, non-membership witnesses, and opt-in PPOI proving. See node.ts.
  */
 export const name = "ppoi-node" as const;
 
 export function ready(): boolean {
   return true;
 }
+
+export * from "./trees";
+export * from "./node";
+export * from "./server";

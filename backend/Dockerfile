@@ -5,6 +5,7 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json bun.lock ./
 COPY apps/web/package.json apps/web/
+COPY packages/db/package.json packages/db/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/recipes/package.json packages/recipes/
 COPY packages/verifier/package.json packages/verifier/
@@ -23,6 +24,7 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.base.json ./
 COPY db ./db
+COPY packages/db ./packages/db
 COPY services/api ./services/api
 WORKDIR /app/services/api
 EXPOSE 3000
