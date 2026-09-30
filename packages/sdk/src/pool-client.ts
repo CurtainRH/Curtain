@@ -21,14 +21,12 @@ import { encodeAbiParameters, encodePacked, keccak256, parseAbiParameters } from
 import { getPoseidon, type WalletKeys } from "./keys";
 import { computeCommitment, computeNullifier, encryptNoteTo, tryDecryptNote, type Note } from "./notes";
 import { LocalMerkleTree, MERKLE_DEPTH } from "./tree";
-import { proveGroth16 } from "./prover";
+import type { Groth16Proof } from "./prover";
+import { LocalNodeProverBackend, type CircuitName, type CircuitPaths, type ProverBackend } from "./prover-backend";
 
 const FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-export interface CircuitPaths {
-  wasm: string;
-  zkey: string;
-}
+export type { CircuitPaths };
 
 export interface CurtainWalletConfig {
   publicClient: PublicClient;
@@ -37,8 +35,20 @@ export interface CurtainWalletConfig {
   poolAddress: Address;
   poolAbi: Abi;
   keys: WalletKeys;
+  /**
+   * Local wasm/zkey paths for desktop/CLI/test proving. Ignored if `proverBackend` is set.
+   * Still required even when `proverBackend` isn't set, since the default
+   * `LocalNodeProverBackend` needs them — see this file's header and prover-backend.ts's.
+   */
   joinsplit2x2: CircuitPaths;
   unshield: CircuitPaths;
+  /**
+   * Overrides how proofs are generated — defaults to `LocalNodeProverBackend` (spawns a
+   * Node.js subprocess; desktop/CLI/tests only, never usable in a browser). Pass a
+   * `ProverAssistBackend` for a browser/mobile build — see prover-backend.ts's header for
+   * why the local default can't run there at all.
+   */
+  proverBackend?: ProverBackend;
   /** RelayAdapt's address/ABI — only required if `relay()` is used. */
   relayAddress?: Address;
   relayAbi?: Abi;
@@ -73,7 +83,15 @@ export function tokenIdOf(token: Address): bigint {
 }
 
 export class CurtainWallet {
-  constructor(private cfg: CurtainWalletConfig) {}
+  private proverBackend: ProverBackend;
+
+  constructor(private cfg: CurtainWalletConfig) {
+    this.proverBackend = cfg.proverBackend ?? new LocalNodeProverBackend({ joinsplit2x2: cfg.joinsplit2x2, unshield: cfg.unshield });
+  }
+
+  private _prove(circuit: CircuitName, circuitInput: Record<string, unknown>): Promise<Groth16Proof> {
+    return this.proverBackend.prove(circuit, circuitInput);
+  }
 
   /** Deposits `rawAmount` of `token`, self-encrypting the note for later recovery via sync(). */
   async shield(token: Address, rawAmount: bigint): Promise<OwnedNote> {
@@ -281,7 +299,7 @@ export class CurtainWallet {
       outOwnerPkX: outputs.map((o) => o.toPkX.toString()),
     };
 
-    const { a, b, c } = await proveGroth16(circuitInput, joinsplit2x2.wasm, joinsplit2x2.zkey);
+    const { a, b, c } = await this._prove("joinsplit2x2", circuitInput);
 
     const ciphertexts = await Promise.all(
       outputs.map((o, j) => encryptNoteTo(o.toEkX, o.toEkY, { tokenId, rawAmount: o.amount, blinding: blindings[j]! })),
@@ -406,7 +424,7 @@ export class CurtainWallet {
       outOwnerPkX: outOwnerPkXs.map(String),
     };
 
-    const { a, b, c } = await proveGroth16(circuitInput, joinsplit2x2.wasm, joinsplit2x2.zkey);
+    const { a, b, c } = await this._prove("joinsplit2x2", circuitInput);
     const proofBytes = encodeGroth16Proof(a, b, c);
 
     // Self-encrypt the change note (self, same pattern shield()/send() already use); the
@@ -463,7 +481,7 @@ export class CurtainWallet {
       nullifier: nullifier.toString(),
       ownerSk: keys.sk.toString(),
     };
-    const { a, b, c } = await proveGroth16(circuitInput, unshield.wasm, unshield.zkey);
+    const { a, b, c } = await this._prove("unshield", circuitInput);
     const proofBytes = encodeGroth16Proof(a, b, c);
 
     const hash = await walletClient.writeContract({

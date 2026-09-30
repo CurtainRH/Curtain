@@ -27,7 +27,7 @@ function scanDirectory(dir: string, fileExtensions: string[]): { file: string; w
       return; // directory doesn't exist — nothing to scan
     }
     for (const entry of entries) {
-      if (entry === "node_modules" || entry === ".git" || entry === "out" || entry === "cache" || entry === "lib") {
+      if (entry === "node_modules" || entry === ".git" || entry === "out" || entry === "cache" || entry === "lib" || entry === "dist") {
         continue;
       }
       if (COPY_LINT_EXCLUDED_FILES.includes(entry)) continue;
