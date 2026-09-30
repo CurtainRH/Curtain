@@ -4,7 +4,7 @@ Privacy system for Robinhood Chain (chain id `4663`). Shield USDG and
 tokenized Stock Tokens, trade/lend/earn from behind the shield, prove
 funds are clean without revealing your book.
 
-Full spec lives in `docs/` (Overview, Backend, Implementation Build).
+Full spec lives in the root `docs/` (Overview, Backend, Implementation Build).
 This repo follows the milestone sequence M0–M12 defined in the
 Implementation Build doc — one milestone per PR, each with green tests.
 

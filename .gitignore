@@ -31,3 +31,26 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+backend/.env
+*.pem
+*.key
+docs/Curtain_Git.md
+
+# Build output
+out/
+build/
+.next/
+.vercel
+
+# Contracts (Foundry)
+backend/contracts/out/
+backend/contracts/cache/
+backend/contracts/broadcast/*/31337/
+
+# Public-sync working branch artifacts
+.sync-public/

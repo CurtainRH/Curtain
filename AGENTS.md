@@ -14,3 +14,9 @@
 - The Curtain site lives in `src/curtain/` and keeps its own history-based in-page router; route files under `src/routes/` (`/`, `/app`, `/app/$`, `/legal/$type`) mount it through `src/components/CurtainApp.tsx`, so deep links work while the original experience stays intact.
 - `CurtainApp` renders client-only (lazy + `ClientOnly`) because the experience uses window, audio, GSAP and wallet APIs at mount.
 - Curtain artwork, films and fonts are CDN assets: pointers in `src/assets/curtain/*.asset.json`, referenced by URL from the curtain CSS/TSX, keeping ~30 MB of media out of the repo.
+
+## Monorepo layout
+
+- Frontend (this Lovable project) stays at the repo root. Don't move it, because Lovable and Vercel build from here.
+- `backend/` is a separate Bun workspace (contracts, circuits, packages, services, apps/web) with its own `package.json` and `bun.lock`. Root lint and tsconfig ignore it.
+- `docs/` holds the product specs. `docs/DUAL_REPO_SYNC.md` explains the private/public repo sync (`scripts/sync-public.py`).

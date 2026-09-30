@@ -2,7 +2,7 @@
   "name": "curtain",
   "private": true,
   "version": "0.0.1",
-  "description": "Curtain ($CRTN) — privacy system for Robinhood Chain",
+  "description": "Curtain ($CRTN) \u2014 privacy system for Robinhood Chain",
   "workspaces": [
     "packages/*",
     "services/*",
@@ -12,7 +12,9 @@
     "test": "bun test --path-ignore-patterns '**/contracts/lib/**'",
     "typecheck": "bun run --filter='*' typecheck",
     "lint": "bun run --filter='*' lint",
-    "build": "bun run --filter='*' build"
+    "build": "bun run --filter='*' build",
+    "test:unit": "bun test --path-ignore-patterns '**/contracts/lib/**' --path-ignore-patterns '**/*.e2e.test.ts'",
+    "check": "bun run typecheck"
   },
   "devDependencies": {
     "@types/bun": "latest",
