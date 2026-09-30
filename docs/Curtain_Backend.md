@@ -1,3 +1,5 @@
+> **Superseded for the MVP by [CURTAIN_V2_SPEC.md](CURTAIN_V2_SPEC.md)** (vault + operator + keepers instead of the zero-knowledge pool). Kept for reference.
+
 # CURTAIN ($CRTN) — Backend Build
 
 **Chain:** Robinhood Chain 4663. **Stack (source spec):** Foundry · Bun/Hono/tRPC v11 · Drizzle · Postgres + Timescale · Redis + BullMQ · studio ZK core (compiled circuits, GPU prover) · Waku-style broadcaster relay.

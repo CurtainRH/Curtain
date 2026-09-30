@@ -2,11 +2,10 @@
   "name": "curtain",
   "private": true,
   "version": "0.0.1",
-  "description": "Curtain ($CRTN) — privacy system for Robinhood Chain",
+  "description": "Curtain ($CRTN) \u2014 private swaps and stake-to-earn on Robinhood Chain",
   "workspaces": [
     "packages/*",
-    "services/*",
-    "apps/*"
+    "services/*"
   ],
   "scripts": {
     "test": "bun test --path-ignore-patterns '**/contracts/lib/**'",

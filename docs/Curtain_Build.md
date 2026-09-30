@@ -1,3 +1,5 @@
+> **Superseded for the MVP by [CURTAIN_V2_SPEC.md](CURTAIN_V2_SPEC.md)** (vault + operator + keepers instead of the zero-knowledge pool). Kept for reference.
+
 # CURTAIN ($CRTN) — Implementation Build (dev handoff)
 
 Companion docs: [Curtain_Overview.md](./Curtain_Overview.md) (what/why), [Curtain_Backend.md](./Curtain_Backend.md) (architecture). This file is the **how**: repo layout, exact interfaces, circuit specs, note/key/encryption formats, service protocols, config, deploy runbook, test matrix, launch gates. Every milestone is sized for one focused build session with a known target and a passing test suite.

@@ -18,5 +18,5 @@
 ## Monorepo layout
 
 - Frontend (this Lovable project) stays at the repo root. Don't move it, because Lovable and Vercel build from here.
-- `backend/` is a separate Bun workspace (contracts, circuits, packages, services, apps/web) with its own `package.json` and `bun.lock`. Root lint and tsconfig ignore it.
-- `docs/` holds the product specs. `docs/DUAL_REPO_SYNC.md` explains the private/public repo sync (`scripts/sync-public.py`).
+- `backend/` is a separate Bun workspace (contracts, packages, services) with its own `package.json` and `bun.lock`. Root lint and tsconfig ignore it.
+- `docs/` holds the product specs; `docs/CURTAIN_V2_SPEC.md` is the current design. `docs/DUAL_REPO_SYNC.md` explains the private/public repo sync (`scripts/sync-public.py`).

@@ -1,3 +1,5 @@
+> **Superseded for the MVP by [CURTAIN_V2_SPEC.md](CURTAIN_V2_SPEC.md)** (vault + operator + keepers instead of the zero-knowledge pool). Kept for reference.
+
 # CURTAIN ($CRTN) — Overview
 
 **One line:** The privacy system for Robinhood Chain. Shield Stock Tokens and USDG, trade/lend/earn from behind the curtain, prove your funds are clean without showing anyone your book. **Chain:** Robinhood Chain (4663). **Sector:** Privacy · RWA **Leader replicated:** Railgun (UTXO shield, RelayAdapt private DeFi, broadcasters, Private Proofs of Innocence, cookbook) + Privacy Pools (ASP roots, ragequit) + Hinkal (view keys, in-shield DeFi) + Zashi (one-tap shield UX). **Leader beaten on:** tokenized-stock support (ERC-8056), 15-minute PPOI standby with safe auto-refund, yield inside the shield, mobile proving, new-chain presence. **Status:** Spec v1.1 (RHC-only) — 2026-09-25.

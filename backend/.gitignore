@@ -14,19 +14,6 @@ contracts/out/
 contracts/broadcast/*/31337/
 !contracts/lib/forge-std/
 
-# Circuits — heavy, regeneratable ZK artifacts (ptau/zkey/r1cs/wasm can run
-# into the hundreds of MB and would blow past GitHub's file-size limits).
-# Regenerate via circuits/scripts/{ceremony,ceremony-resume}.sh. Small,
-# non-regeneratable-by-hash outputs (verification keys, test vectors, the
-# ceremony transcript) are committed.
-circuits/node_modules/
-circuits/build/ptau/
-circuits/build/**/*.r1cs
-circuits/build/**/*.zkey
-circuits/build/**/*.sym
-circuits/build/**/*_js/
-circuits/build/**/Verifier.sol
-
 # Env / secrets
 .env
 .env.local
@@ -52,5 +39,3 @@ npm-debug.log*
 # Test / coverage
 coverage/
 
-# Runtime scratch files (proof-gen subprocess I/O)
-services/ppoi-node/test/.tmp-*.json

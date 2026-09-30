@@ -16,7 +16,7 @@ describe("migrate", () => {
     const tables = (await db.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
     )).map((r) => r.table_name);
-    for (const t of ["tokens", "commitments", "providers", "broadcasters", "recipes", "solvency", "schema_migrations"]) {
+    for (const t of ["intents", "batches", "payouts", "chain_cursor", "schema_migrations"]) {
       expect(tables).toContain(t);
     }
   });

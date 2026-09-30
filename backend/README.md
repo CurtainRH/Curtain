@@ -1,82 +1,79 @@
-# Curtain ($CRTN)
+# Curtain backend
 
-Privacy system for Robinhood Chain (chain id `4663`). Shield USDG and
-tokenized Stock Tokens, trade/lend/earn from behind the shield, prove
-funds are clean without revealing your book.
+Private swaps and stake-to-earn on Robinhood Chain (4663). Design: [`docs/CURTAIN_V2_SPEC.md`](../docs/CURTAIN_V2_SPEC.md).
 
-Full spec lives in the root `docs/` (Overview, Backend, Implementation Build).
-This repo follows the milestone sequence M0–M12 defined in the
-Implementation Build doc — one milestone per PR, each with green tests.
-
-## Stack
-
-- **Contracts:** Foundry (Solidity 0.8.26)
-- **Circuits:** circom 2.x + snarkjs (Groth16, BN254)
-- **Backend:** Bun + Node/Express (TypeScript)
-- **Data:** Postgres + Redis, hosted on Railway (no Supabase, no Timescale —
-  time-series tables use plain partitioned Postgres instead)
-- **Deploy target:** Railway (all services except GPU/TEE-based mobile
-  proving, which lands in M8 and needs separate infra)
-
-## Repo layout
+## Layout
 
 ```
-contracts/    Foundry project — pool, gate, adapt, stealth, staking, etc.
-circuits/     circom circuits — joinsplit, ppoi, solvency
-packages/     sdk, recipes, verifier — shared TypeScript libraries
-services/     broadcaster, ppoi-node, prover-assist, multiplier-view,
-              solvency, indexer, api, status — independently deployable
-apps/web/     wallet web app
-infra/        deploy manifests, local dev config
-docs/         project specs (Overview, Backend, Implementation Build)
+contracts/            Foundry
+  src/vault/          CurtainVault — deposits, in-vault swaps, signed payouts, escape hatch
+  src/staking/        CurtainStaking — lock tiers, pluggable reward token, funded emissions
+  src/token/          CRTN (launches later)
+  src/stealth/        ERC-5564/6538 stealth addresses
+  script/Deploy.s.sol writes deployments/<chainid>.json
+packages/db           Postgres access + migrations (PGlite in tests)
+packages/sdk          client: swap, escape-hatch refund, staking; shared ABIs
+services/operator     intents API, chain watcher, batch swaps, payout signing, refund challenger
+services/keeper       submits signed payouts for a fee; anyone can run it
+services/multiplier-view  ERC-8056 display multipliers
+db/migrations         operator schema
+scripts/devnet.ts     anvil + Deploy.s.sol, for e2e tests
 ```
+
+## How a private swap runs
+
+1. **Intent:** the frontend calls `POST /intents`. The operator stores the recipient, output token, minimum output and delay, and returns a `deadlineHash` plus the user's escape ticket (`deadline`, `salt`).
+2. **Deposit:** the user calls `CurtainVault.deposit(token, amount, deadlineHash)`.
+3. **Swap:** at the scheduled time, the operator batches due deposits by token pair and swaps inside the vault (`executeSwap`), enforcing the strictest per-user minimum.
+4. **Payout:** the operator signs one payout per deposit. Any keeper submits it and earns the keeper fee.
+5. **Escape hatch:** if a deposit is never paid, its depositor can refund it 3 minutes after the deadline. There's a 10-minute challenge window; paid deposits get challenged.
 
 ## Local development
 
 ```bash
-# 1. Start local Postgres + Redis (mirrors what Railway will host)
-docker compose up -d
-
-# 2. Install dependencies
 bun install
-
-# 3. Copy env template and fill in values
 cp .env.example .env
 
-# 4. Run tests
-bun run test:unit        # TypeScript unit tests
-bun test                 # everything, incl. e2e (needs anvil, node, and circuit keys)
-cd contracts && forge test   # contracts
+bun run check                 # typecheck every workspace
+bun run test                  # all tests, incl. e2e (needs Foundry: anvil + forge)
+cd contracts && forge test    # contracts
 
-# Local chain with the full stack (Deploy.s.sol needs a high block gas limit on anvil)
+# Local chain with the stack deployed
 anvil --gas-limit 1000000000
 cd contracts && forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --slow
-forge script script/Pin.s.sol --rpc-url http://127.0.0.1:8545
 ```
 
-## Milestone status
+- **`--gas-limit` on anvil:** without it, a large deployment transaction can wait for a block that never comes.
+- **`--slow` on forge:** sends one transaction at a time; parallel broadcasting occasionally drops one on anvil.
 
-Code status after the September 2026 spec cross-check (see the root README and git history
-for the fixes). "Built" means implemented and tested locally; nothing is deployed to 4663.
+## Running
 
-| # | Milestone | Status |
-|---|---|---|
-| M0 | Repo + toolchain + CI | Built |
-| M1 | Stealth v0 | Built |
-| M2 | Circuits | Built, **dev-scale**: single-contributor ceremony, PPOI SMT depth 32 (spec 160), solvency chunk 4 (spec 4096) |
-| M3 | Pool | Built; fee now enforced on unshield, broadcaster paid from the proof, guardian shield pause |
-| M4 | Gate + PPOI | Built; stale/removed providers excluded, previous-root window; `ppoi-node` service (lists, roots, auto-flagging, witnesses, opt-in proving) |
-| M5 | Wallet SDK + web | Built |
-| M6 | RelayAdapt + recipes v1 | Built; relay calls/outputs/origin now bound into the proof (front-running theft fixed) |
-| M7 | Broadcasters | Built; broadcasters now verify the proof pays them |
-| M8 | prover-assist | Protocol built; attestation is a **mock**, needs real TDX hardware |
-| M9 | Morpho / Arcus / Prism recipes | Built against mocks |
-| M10 | Disclosure + Solvency | Built |
-| M11 | Staking + fees | Built; vote locking, 4% quorum, 24h timelock with multisig veto, fee vote now reaches the pool |
-| M12 | Mainnet | **Not done**: needs the real multi-party ceremony, production circuit parameters, real TDX, token/verifier addresses, then `Deploy.s.sol` + `Pin.s.sol` on 4663 |
+```bash
+docker compose up -d                                  # Postgres
+cd services/operator && bun run start                 # needs .env (see .env.example)
+cd services/keeper && bun run start                   # optional: anyone can run keepers
+```
+
+## Status
+
+| Piece | Status |
+|---|---|
+| CurtainVault | Built, 14 Foundry tests |
+| CurtainStaking | Built, 8 Foundry tests |
+| Operator | Built; e2e on anvil covers swap, keeper payout, challenge, refund, delay, slippage retry, rescans |
+| Keeper | Built, e2e |
+| SDK | Built, e2e (swap, refund, staking) |
+| Deploy | `Deploy.s.sol` checks all addresses on 4663; not deployed yet |
+| $CRTN | Not launched; staking waits for `setTokens` |
+| Lending (Morpho) | After launch |
+
+## Before mainnet
+
+- **Keys (MVP):** a single admin key and a single operator key. A stolen operator key puts vault funds at risk; move both to a multisig/MPC after launch.
+- **Tokens and router:** set the real token addresses and the Uniswap router on 4663.
+- **Postgres:** run a Postgres the operator can reach, and back it up. It holds the depositor→recipient mapping and the payout secrets that power challenges.
+- **Monitoring:** alert when the operator hasn't paid an instant swap within a few minutes, since users can refund 3 minutes after the deadline.
 
 ## Copy rules
 
-Blocked: "mixer," "untraceable," "anonymous," "hide," "APY."
-Permitted: "private," "provably clean," "selectively disclosable,"
-"vault NAV accrues."
+Blocked: "mixer", "untraceable", "anonymous", "hide", "APY". Permitted: "private", "selectively disclosable".

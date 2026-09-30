@@ -7,7 +7,7 @@ script = "script"
 solc_version = "0.8.26"
 optimizer = true
 optimizer_runs = 200
-via_ir = true # required once TransactArgs grew feeRecipient/extData (stack too deep in the ABI decoder)
+via_ir = false
 fs_permissions = [{ access = "read-write", path = "./deployments" }, { access = "read", path = "./test/fixtures" }]
 
 remappings = [

@@ -1,16 +1,13 @@
 {
-  "name": "@curtain/sdk",
+  "name": "@curtain/keeper",
   "version": "0.0.1",
   "private": true,
-  "description": "Curtain v2 client: private swaps (intent + deposit), escape-hatch refunds, stake-to-earn",
+  "description": "Submits operator-signed Curtain payouts and earns the keeper fee. Anyone can run it.",
   "type": "module",
   "module": "src/index.ts",
   "types": "src/index.ts",
-  "exports": {
-    ".": "./src/index.ts",
-    "./abi": "./src/abi.ts"
-  },
   "scripts": {
+    "start": "bun run src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
