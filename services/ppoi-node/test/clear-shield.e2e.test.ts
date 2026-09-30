@@ -129,6 +129,7 @@ describe("ppoi-node: clears a shield in < 2 min (M4 acceptance)", () => {
       const poolAddr = await deploy(curtainPoolArtifact, [
         hasherT3, hasherT5, assetGateAddr, screeningGateAddr, mockVerifier2x2, mockVerifier3x3,
         mockUnshieldVerifier, "0x0000000000000000000000000000000000000000", deployer, 20, 20,
+        "0x0000000000000000000000000000000000000000", // no meta-tx forwarder in this test
       ]);
 
       await deployerClient.writeContract({

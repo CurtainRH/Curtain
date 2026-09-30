@@ -68,7 +68,8 @@ contract RelayAdaptM9Test is Test {
             predictedAdapt,
             treasury,
             FEE_BPS,
-            FEE_BPS
+            FEE_BPS,
+            address(0)
         );
 
         adapt = new RelayAdapt(address(pool), address(this));

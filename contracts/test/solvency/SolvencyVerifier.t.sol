@@ -48,7 +48,8 @@ contract SolvencyVerifierTest is Test {
             address(0xADA7),
             owner,
             20,
-            20
+            20,
+            address(0)
         );
 
         mockVerifier = new MockSolvencyVerifier();

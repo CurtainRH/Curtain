@@ -48,7 +48,7 @@ contract ScreeningGateTest is Test {
 
         pool = new CurtainPool(
             hasherT3, hasherT5, address(assetGate), address(gate), address(v2), address(v3),
-            address(unshieldVerifier), address(0), address(0x7EA5), FEE_BPS, FEE_BPS
+            address(unshieldVerifier), address(0), address(0x7EA5), FEE_BPS, FEE_BPS, address(0)
         );
         gate.setPool(address(pool));
 

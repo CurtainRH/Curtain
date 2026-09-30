@@ -13,6 +13,7 @@ import {DisclosureRegistry} from "../src/disclosure/DisclosureRegistry.sol";
 import {SolvencyVerifier} from "../src/solvency/SolvencyVerifier.sol";
 import {CRTN} from "../src/token/CRTN.sol";
 import {CrtnStaking} from "../src/staking/CrtnStaking.sol";
+import {ERC2771Forwarder} from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 
 import {PoseidonT2Deployer} from "../src/lib/PoseidonT2.sol";
 import {PoseidonT3Deployer} from "../src/lib/PoseidonT3.sol";
@@ -86,6 +87,7 @@ contract DeployScript is Script {
 
     ScreeningGate public gate;
     DisclosureRegistry public disclosure;
+    ERC2771Forwarder public forwarder;
     CurtainPool public pool;
     RelayAdapt public adapt;
     SolvencyVerifier public solvencyVerifier;
@@ -190,6 +192,12 @@ contract DeployScript is Script {
 
         disclosure = new DisclosureRegistry();
 
+        // Unmodified deployment of OpenZeppelin's audited ERC2771Forwarder — CurtainPool's
+        // sole trusted forwarder for gasless `shieldMeta` bundles (see CurtainPool.sol's
+        // header on why this preserves origin-binding security instead of a naive
+        // forwarder-holds-funds design).
+        forwarder = new ERC2771Forwarder("Curtain");
+
         // Predict RelayAdapt's address (deployed right after CurtainPool, at
         // nonce+1) so it can be baked into CurtainPool's constructor with no
         // mutable setter — see CurtainPool.sol's header.
@@ -207,7 +215,8 @@ contract DeployScript is Script {
             predictedRelayAdapt,
             address(staking), // fee-routing fix — see this file's header
             20, // 0.20% shield fee
-            20  // 0.20% unshield fee
+            20, // 0.20% unshield fee
+            address(forwarder)
         );
 
         adapt = new RelayAdapt(address(pool), deployer);
@@ -243,6 +252,7 @@ contract DeployScript is Script {
         console.log("ScreeningGate:     ", address(gate));
         console.log("RelayAdapt:        ", address(adapt));
         console.log("DisclosureRegistry:", address(disclosure));
+        console.log("ERC2771Forwarder:  ", address(forwarder));
         console.log("SolvencyVerifier:  ", address(solvencyVerifier));
         console.log("StealthRegistry:   ", address(stealthRegistry));
         console.log("StealthAnnouncer:  ", address(stealthAnnouncer));

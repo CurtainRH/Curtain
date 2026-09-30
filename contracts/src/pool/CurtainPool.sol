@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 import {IPoseidonT3} from "../lib/PoseidonT3.sol";
 import {IPoseidonT5} from "../lib/PoseidonT5.sol";
 import {IncrementalMerkleTree} from "../lib/IncrementalMerkleTree.sol";
@@ -68,7 +69,29 @@ import {IScreeningGate} from "../gate/IScreeningGate.sol";
 /// requires (a real Deploy.s.sol script doing the same, end to end for
 /// every contract, is still an M12 launch-runbook item -- see
 /// Curtain_Build.md section 7 and section 11).
-contract CurtainPool {
+/// META-TX SUPPORT FOR `shieldMeta` (post-M12, resolving Curtain_Build.md §11 item 22's
+/// forwarder gap): CurtainPool inherits OpenZeppelin's audited ERC2771Context so a single,
+/// immutable `trustedForwarder` (set once at construction, no setter — the zero-admin
+/// invariant is untouched, `isTrustedForwarder` is a plain view function, not a selector any
+/// immutability check would flag) may submit a `shield()` call on a user's behalf while
+/// `_msgSender()` still resolves to the REAL signer, not the forwarder's own address. This
+/// matters for a subtle reason: `originOf[commit]` binds `unshieldToOrigin`'s payout
+/// destination, and it is deliberately anchored to the caller rather than any
+/// caller-supplied value specifically to prevent spoofing (see this file's header on the
+/// RelayAdapt #140-bug precedent). A naive meta-tx design where a forwarder contract holds
+/// funds and calls `shield()` itself would bind `originOf` to the FORWARDER, permanently
+/// routing that note's unshield-to-origin escape hatch to the forwarder instead of the real
+/// depositor — reintroducing exactly the bug class Curtain already closed elsewhere by
+/// construction, not a stylistic nitpick. ERC2771Context avoids this: the forwarder only
+/// relays an EIP-712-signed request (see ShieldMetaForwarder.sol, an unmodified deployment
+/// of OpenZeppelin's ERC2771Forwarder), and `_msgSender()` recovers the true signer from the
+/// trailing 20 bytes of calldata the forwarder appends — token transfers and `originOf`
+/// binding both use `_msgSender()`, so they land on the real user's address exactly as if
+/// they'd called `shield()` directly and paid their own gas. Only `shield()`'s two
+/// `msg.sender` uses were changed to `_msgSender()`; `reshield()`'s `msg.sender != relayAdapt`
+/// check is untouched (reshield is only ever called by RelayAdapt directly — meta-tx
+/// forwarding was never relevant there).
+contract CurtainPool is ERC2771Context {
     using SafeERC20 for IERC20;
     using IncrementalMerkleTree for IncrementalMerkleTree.Tree;
 
@@ -143,8 +166,9 @@ contract CurtainPool {
         address relayAdaptAddr,
         address treasuryAddr,
         uint16 feeBpsShield_,
-        uint16 feeBpsUnshield_
-    ) {
+        uint16 feeBpsUnshield_,
+        address trustedForwarderAddr
+    ) ERC2771Context(trustedForwarderAddr) {
         hasherT3 = IPoseidonT3(hasherT3Addr);
         commitHasher = IPoseidonT5(hasherT5Addr);
         assetGate = AssetGate(assetGateAddr);
@@ -192,14 +216,14 @@ contract CurtainPool {
     {
         if (!assetGate.isRegistered(token)) revert TokenNotRegistered();
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), rawAmount);
+        IERC20(token).safeTransferFrom(_msgSender(), address(this), rawAmount);
 
         uint256 fee = (rawAmount * feeBpsShield) / 10000;
         if (fee > 0) IERC20(token).safeTransfer(treasury, fee);
 
         commit = bytes32(commitHasher.poseidon([tokenIdOf(token), rawAmount - fee, ownerPkX, blinding]));
         leafIndex = mainTree.insert(hasherT3, uint256(commit));
-        originOf[commit] = msg.sender;
+        originOf[commit] = _msgSender();
         shieldedAt[commit] = uint64(block.timestamp);
         leafIndexOf[commit] = leafIndex;
 

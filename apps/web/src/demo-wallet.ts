@@ -103,6 +103,7 @@ async function main() {
     joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
     "0x0000000000000000000000000000000000000000", // no RelayAdapt in this demo
     deployer, 20, 20,
+    "0x0000000000000000000000000000000000000000", // no meta-tx forwarder in this demo
   ]);
   const poolArtifact = loadArtifact("CurtainPool");
   log("CurtainPool deployed.", { poolAddr });

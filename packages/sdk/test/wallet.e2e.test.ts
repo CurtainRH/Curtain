@@ -98,6 +98,7 @@ describe("CurtainWallet: shield -> send -> unshieldToOrigin (M5 acceptance)", ()
         joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
         "0x0000000000000000000000000000000000000000", // no RelayAdapt in this test
         deployer, 20, 20,
+        "0x0000000000000000000000000000000000000000", // no meta-tx forwarder in this test
       ]);
 
       const erc20Artifact = loadArtifact("MockERC20");

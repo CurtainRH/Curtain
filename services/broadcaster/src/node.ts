@@ -28,12 +28,6 @@ export class NotYetAssignableError extends Error {
   }
 }
 
-export class UnsupportedBundleKindError extends Error {
-  constructor(kind: string) {
-    super(`bundle kind "${kind}" has no corresponding on-chain entry point yet — see Curtain_Build.md §11`);
-  }
-}
-
 interface TrackedBundle {
   bundle: Bundle;
   assignee: Address | undefined;
@@ -80,10 +74,20 @@ export class BroadcasterNode {
    * assignment window has elapsed (the censorship-fallback path). Simulates
    * first (an `eth_call` against the exact calldata) so a doomed
    * transaction never gets broadcast and burns real gas.
+   *
+   * `shieldMeta` bundles (`to` = the deployed ERC2771Forwarder, `calldata` = an encoded
+   * `execute(ForwardRequestData)` call — see CurtainPool.sol's header and
+   * CurtainPoolMetaTx.t.sol) submit through this exact same generic path with no special
+   * handling needed: the forwarder itself verifies the signer's EIP-712 signature on-chain,
+   * so there's nothing meta-tx-specific left for the broadcaster to check. They also skip
+   * `checkFee()` — unlike `transact`/`relay`/`unshieldToOrigin`, a shieldMeta's fee isn't
+   * bound into any proof's public signals (there is no proof; it just forwards a plain
+   * `shield()` call), so there is no proof-enforced broadcaster fee to require. Per
+   * ERC2771Forwarder's own header, gasless relaying like this is expected to run on an
+   * out-of-band incentive (e.g. an app sponsoring its users' first shield as a user-
+   * acquisition cost), not a per-bundle fee schedule.
    */
   async submitBundle(bundle: Bundle, nowMs: number = Date.now()): Promise<Hex> {
-    if (bundle.kind === "shieldMeta") throw new UnsupportedBundleKindError(bundle.kind);
-
     await this.trackBundle(bundle, nowMs);
     const tracked = this.tracked.get(bundleId(bundle))!;
 
@@ -93,7 +97,7 @@ export class BroadcasterNode {
       if (!windowElapsed) throw new NotYetAssignableError(tracked.assignee!, tracked.assignedAtMs + this.config.assignmentWindowMs);
     }
 
-    this.checkFee(bundle);
+    if (bundle.kind !== "shieldMeta") this.checkFee(bundle);
 
     await this.publicClient.call({ account: this.config.address, to: bundle.to, data: bundle.calldata });
 

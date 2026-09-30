@@ -15,7 +15,7 @@ import { CurtainWallet, generateWalletKeys, type OwnedNote } from "../src";
 
 const CONTRACTS_OUT = join(import.meta.dir, "../../../contracts/out");
 const CIRCUITS_BUILD = join(import.meta.dir, "../../../circuits/build");
-const ANVIL_PORT = 8651;
+const ANVIL_PORT = 8652;
 const RPC_URL = `http://127.0.0.1:${ANVIL_PORT}`;
 
 const anvilChain = defineChain({
@@ -105,6 +105,7 @@ describe("CurtainWallet.relay(): BuyAndShield end to end (post-M12 acceptance)",
         joinSplit2x2AdapterAddr, joinSplit3x3MockAddr, unshieldAdapterAddr,
         predictedRelayAdapt,
         deployer, 20, 20,
+        "0x0000000000000000000000000000000000000000", // no meta-tx forwarder in this test
       ]);
 
       const relayArtifact = loadArtifact("RelayAdapt");

@@ -59,7 +59,7 @@ contract RelayAdaptTest is Test {
         pool = new CurtainPool(
             hasherT3, hasherT5, address(assetGate), address(screeningGate),
             address(verifier2x2), address(verifier3x3), address(unshieldVerifier),
-            predictedRelayAdapt, treasury, FEE_BPS, FEE_BPS
+            predictedRelayAdapt, treasury, FEE_BPS, FEE_BPS, address(0)
         );
         relayAdapt = new RelayAdapt(address(pool), address(this));
         assertEq(address(relayAdapt), predictedRelayAdapt, "RelayAdapt landed at an unpredicted address");

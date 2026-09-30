@@ -73,7 +73,8 @@ contract LaunchGatesTest is Test {
             predictedRelayAdapt,
             treasury,
             20,
-            20
+            20,
+            address(0)
         );
 
         adapt = new RelayAdapt(address(pool), address(this));
