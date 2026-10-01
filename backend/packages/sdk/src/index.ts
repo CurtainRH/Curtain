@@ -80,10 +80,11 @@ export class CurtainClient {
 
   /** Creates the intent, approves the vault if needed, and deposits. */
   async swap(p: SwapParams): Promise<{ intentId: string; ticket: EscapeTicket; depositTx: Hex }> {
-    const intent = await this.api<{ id: string; deadline: string; salt: Hex; deadlineHash: Hex; vault: Address }>("/intents", p);
-    const { publicClient } = this.cfg;
     const wallet = this.wallet;
     const owner = wallet.account!.address;
+    // The operator matches the deposit on (depositor, hash), so it must come from this wallet.
+    const intent = await this.api<{ id: string; deadline: string; salt: Hex; deadlineHash: Hex; vault: Address }>("/intents", { ...p, depositor: owner });
+    const { publicClient } = this.cfg;
 
     const allowance = await publicClient.readContract({ address: p.tokenIn, abi: ERC20_ABI, functionName: "allowance", args: [owner, intent.vault] });
     if (allowance < p.amountIn) {

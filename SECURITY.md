@@ -37,7 +37,7 @@ Include the affected component, the impact, reproduction steps or a PoC, and any
 
 ## Attack surfaces we care most about
 
-1. **Vault funds:** any way to take funds from `CurtainVault` without a valid operator signature or a legitimate refund. For example: payout replay, signature malleability, a router-returned balance trick in `executeSwap`, or double refunds.
+1. **Vault funds:** any way to take funds from `CurtainVault` without a valid operator signature or a legitimate refund. For example: settlement replay, signature malleability, a router balance trick in `settle`, paying more than a swap produced, or double refunds.
 2. **Escape hatch:** any way to block a legitimate refund, refund a deposit that was already paid, or learn a deposit's hidden deadline early.
 3. **Linkability:** any way to link a deposit to its payout from public data beyond timing and amounts, including through the operator API.
 4. **Staking:** reward accounting errors, principal counted as rewards, or withdrawing before unlock.
@@ -45,7 +45,7 @@ Include the affected component, the impact, reproduction steps or a PoC, and any
 
 ## Known trust assumptions (MVP)
 
-- The operator key signs payouts and sets swap prices. If it's stolen, vault funds are at risk. The escape hatch protects against the operator going offline, not against key theft.
+- The operator key signs settlements, so it sets swap prices and recipients. If it's stolen or malicious, vault funds are at risk, and it can block a refund by paying 1 wei under the deposit's tag (internal audit M-02). The escape hatch protects against the operator going offline, not against key theft.
 - A single admin key controls allowlisted tokens and routers, the operator address and the fee (capped at 1%).
 - The operator's database holds the depositor→recipient mapping.
 

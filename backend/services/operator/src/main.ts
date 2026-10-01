@@ -6,6 +6,8 @@
  *   TOKENS                 JSON {"USDG":"0x...","NVDA":"0x...",...}
  *   ROUTE                  "uniswap-v3" (default) or "mock" (local chains)
  *   UNISWAP_FEE_TIER       default 3000
+ *   UNISWAP_QUOTER_ADDR    QuoterV2 (required for uniswap-v3)
+ *   SLIPPAGE_BPS           default 50
  *   KEEPER_FEE_BPS         default 5
  *   OPERATOR_PORT          default 3100
  *   TICK_MS                default 5000
@@ -16,7 +18,7 @@ import { createPublicClient, createWalletClient, defineChain, http, type Address
 import { privateKeyToAccount } from "viem/accounts";
 import { createApi } from "./api";
 import { Operator } from "./operator";
-import { mockRoute, uniswapV3Route } from "./routes";
+import { mockQuoter, mockRoute, uniswapV3Quoter, uniswapV3Route } from "./routes";
 
 const env = (k: string, d?: string) => {
   const v = process.env[k] ?? d;
@@ -35,15 +37,18 @@ const db = await bunSqlDb();
 await migrate(db);
 
 const vault = env("VAULT_ADDR") as Address;
+const router = env("DEX_ROUTER_ADDR") as Address;
 const keeperFeeBps = Number(env("KEEPER_FEE_BPS", "5"));
+const mock = env("ROUTE", "uniswap-v3") === "mock";
+const feeTier = Number(env("UNISWAP_FEE_TIER", "3000"));
 const operator = new Operator({
-  db, publicClient, walletClient, chainId, vault,
-  router: env("DEX_ROUTER_ADDR") as Address,
-  route: env("ROUTE", "uniswap-v3") === "mock" ? mockRoute : uniswapV3Route(Number(env("UNISWAP_FEE_TIER", "3000"))),
+  db, publicClient, walletClient, chainId, vault, router,
+  route: mock ? mockRoute : uniswapV3Route(feeTier),
+  quote: mock ? mockQuoter(publicClient, router) : uniswapV3Quoter(publicClient, env("UNISWAP_QUOTER_ADDR") as Address, feeTier),
+  slippageBps: Number(env("SLIPPAGE_BPS", "50")),
   keeperFeeBps,
   startBlock: process.env["START_BLOCK"] ? BigInt(process.env["START_BLOCK"]) : await publicClient.getBlockNumber(),
 });
-await operator.reconcile();
 
 const server = Bun.serve({
   port: Number(env("OPERATOR_PORT", "3100")),
@@ -58,7 +63,7 @@ for (;;) {
   try {
     await operator.syncChain();
     await operator.processDue(now);
-    await operator.submitPayouts(now);
+    await operator.submitSettlements(now);
     await operator.syncChain();
   } catch (e) {
     console.error("operator tick failed:", e);

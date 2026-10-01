@@ -9,8 +9,8 @@ import { parseAbi, parseEther, type Address, type Hex } from "viem";
 import { startDevnet, type Devnet } from "../../../scripts/devnet";
 import { ERC20_ABI, VAULT_ABI } from "../src/abi";
 import { createApi } from "../src/api";
-import { Operator, toPayout } from "../src/operator";
-import { mockRoute } from "../src/routes";
+import { Operator, settleArgs } from "../src/operator";
+import { mockQuoter, mockRoute } from "../src/routes";
 
 setDefaultTimeout(180_000);
 
@@ -46,6 +46,7 @@ async function call(path: string, body?: unknown) {
 async function swap(amountIn: bigint, minOut: bigint, delaySeconds = 0) {
   const { status, body } = await call("/intents", {
     tokenIn: usdg, amountIn: amountIn.toString(), tokenOut: nvda, recipient, minOut: minOut.toString(), delaySeconds,
+    depositor: d.wallets.user.account!.address,
   });
   expect(status).toBe(201);
   const user = d.wallets.user;
@@ -90,7 +91,7 @@ beforeAll(async () => {
   await migrate(db);
   op = new Operator({
     db, publicClient: d.publicClient as never, walletClient: d.wallets.operator as never, chainId: 31337,
-    vault: d.deployment.vault, router: d.deployment.router, route: mockRoute, keeperFeeBps: 5,
+    vault: d.deployment.vault, router: d.deployment.router, route: mockRoute, quote: mockQuoter(d.publicClient, d.deployment.router), keeperFeeBps: 5,
     startBlock: await d.publicClient.getBlockNumber(),
   });
   api = createApi({ db, operator: op, vault: d.deployment.vault, tokens: d.deployment.tokens, keeperFeeBps: 5, now: () => chainNow });
@@ -99,32 +100,36 @@ beforeAll(async () => {
 afterAll(() => d?.stop());
 
 describe("private swap lifecycle (e2e)", () => {
-  it("instant swap: deposit -> batch swap in the vault -> signed payout submitted by a third-party keeper", async () => {
+  it("instant swap: deposit -> signed settlement (swap + payout) landed atomically by a third-party keeper", async () => {
     const s = await swap(parseEther("1000"), parseEther("4.9"));
     expect((await call(`/intents/${s.id}`)).body.status).toBe("deposited");
 
     await op.processDue(await d.now());
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("payout_signed");
+    expect((await call(`/intents/${s.id}`)).body.status).toBe("settling");
+    // Nothing is swapped until the settlement lands: the USDG is still in the vault.
+    expect(await balance(usdg, d.deployment.vault)).toBeGreaterThanOrEqual(parseEther("1000"));
 
-    // A keeper that isn't the operator picks the payout up from the public API and submits it.
-    const pending = (await call("/payouts/pending")).body as any[];
+    // A keeper that isn't the operator picks the settlement up from the public API and lands it.
+    const pending = (await call("/settlements/pending")).body as any[];
     expect(pending.length).toBe(1);
     const keeper = d.wallets.keeper;
     const keeperBefore = await balance(nvda, keeper.account!.address);
     await wait(await keeper.writeContract({
-      chain: d.chain, account: keeper.account!, address: d.deployment.vault, abi: VAULT_ABI, functionName: "payout",
-      args: [toPayout(pending[0]), pending[0].signature],
+      chain: d.chain, account: keeper.account!, address: d.deployment.vault, abi: VAULT_ABI, functionName: "settle",
+      args: settleArgs(pending[0]),
     }));
     await op.syncChain();
 
-    const out = parseEther("5"); // 1000 USDG at 200/NVDA
-    expect(await balance(nvda, recipient)).toBe(out - (out * 20n) / 10000n - (out * 5n) / 10000n);
-    expect(await balance(nvda, d.deployment.treasury)).toBe((out * 20n) / 10000n);
-    expect((await balance(nvda, keeper.account!.address)) - keeperBefore).toBe((out * 5n) / 10000n);
+    const gross = (parseEther("5") * 9950n) / 10000n; // 1000 USDG at 200/NVDA, minus 0.5% slippage tolerance
+    const fee = (gross * 20n) / 10000n;
+    const keeperFee = (gross * 5n) / 10000n;
+    expect(await balance(nvda, recipient)).toBe(gross - fee - keeperFee);
+    expect(await balance(nvda, d.deployment.treasury)).toBe(fee);
+    expect((await balance(nvda, keeper.account!.address)) - keeperBefore).toBe(keeperFee);
     const status = (await call(`/intents/${s.id}`)).body;
     expect(status.status).toBe("paid");
     expect(status.payoutTx).toMatch(/^0x/);
-    expect(((await call("/payouts/pending")).body as any[]).length).toBe(0);
+    expect(((await call("/settlements/pending")).body as any[]).length).toBe(0);
 
     // The user tries to double-dip with the escape hatch after being paid: the operator challenges.
     await warp(Number(s.deadline) - (await d.now()) + 180);
@@ -155,7 +160,7 @@ describe("private swap lifecycle (e2e)", () => {
     }));
     await op.syncChain();
     expect((await call(`/intents/${s.id}`)).body.status).toBe("refund_requested");
-    // Once a refund is requested the operator must not pay it out.
+    // Once a refund is requested the operator must not settle it.
     await op.processDue(await d.now());
     expect((await call(`/intents/${s.id}`)).body.status).toBe("refund_requested");
 
@@ -179,23 +184,37 @@ describe("private swap lifecycle (e2e)", () => {
       expect((await call(`/intents/${s.id}`)).body.status).toBe("deposited");
     }
 
-    // Price crashes 10x: the batch minimum can't be met, so nothing is paid and the intent stays queued.
+    // Price crashes 10x: the intent's minimum can't be met, so nothing is signed and it stays queued.
     const deployer = d.wallets.deployer;
     await wait(await deployer.writeContract({ chain: d.chain, account: deployer.account!, address: d.deployment.router, abi: MOCK, functionName: "setRate", args: [usdg, nvda, parseEther("0.0005")] }));
     await warp(Math.max(0, payAt - (await d.now())) + 1);
-    await op.processDue(await d.now());
+    expect(await op.processDue(await d.now())).toEqual([]);
     expect((await call(`/intents/${s.id}`)).body.status).toBe("deposited");
-    const [failed] = await db.query<{ n: string }>("SELECT count(*)::text AS n FROM batches WHERE status = 'failed'");
-    expect(Number(failed!.n)).toBeGreaterThan(0);
 
     // Price recovers: next tick pays, with the operator's own keeper this time.
     await wait(await deployer.writeContract({ chain: d.chain, account: deployer.account!, address: d.deployment.router, abi: MOCK, functionName: "setRate", args: [usdg, nvda, parseEther("0.005")] }));
     const before = await balance(nvda, recipient);
     await op.processDue(await d.now());
-    await op.submitPayouts(await d.now());
+    await op.submitSettlements(await d.now());
     await op.syncChain();
     expect((await call(`/intents/${s.id}`)).body.status).toBe("paid");
     expect((await balance(nvda, recipient)) - before).toBeGreaterThanOrEqual(parseEther("0.9"));
+  });
+
+  it("an unlanded settlement expires and its deposit is re-settled at the next price", async () => {
+    const s = await swap(parseEther("400"), parseEther("1.9"));
+    const [first] = await op.processDue(await d.now());
+    expect(first).toBeDefined();
+    // Nobody lands it; its TTL (5 min) passes but the intent's own deadline hasn't.
+    await warp(301);
+    const [second] = await op.processDue(await d.now());
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    const [row] = await db.query<{ status: string }>("SELECT status FROM settlements WHERE id = $1", [first]);
+    expect(row!.status).toBe("expired");
+    await op.submitSettlements(await d.now());
+    await op.syncChain();
+    expect((await call(`/intents/${s.id}`)).body.status).toBe("paid");
   });
 
   it("re-reading old blocks is harmless: statuses unchanged, no duplicate challenges", async () => {
@@ -207,8 +226,13 @@ describe("private swap lifecycle (e2e)", () => {
   });
 
   it("rejects bad intents", async () => {
-    expect((await call("/intents", { tokenIn: usdg, amountIn: "1", tokenOut: "0x0000000000000000000000000000000000000001", recipient, minOut: "1", delaySeconds: 0 })).status).toBe(400);
-    expect((await call("/intents", { tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, minOut: "1", delaySeconds: 181 * 24 * 3600 })).status).toBe(400);
-    expect((await call("/intents", { tokenIn: usdg, amountIn: "0", tokenOut: nvda, recipient, minOut: "1", delaySeconds: 0 })).status).toBe(400);
+    const depositor = d.wallets.user.account!.address;
+    const base = { tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, depositor, minOut: "1", delaySeconds: 0 };
+    expect((await call("/intents", { ...base, tokenOut: "0x0000000000000000000000000000000000000001" })).status).toBe(400);
+    expect((await call("/intents", { ...base, delaySeconds: 181 * 24 * 3600 })).status).toBe(400);
+    expect((await call("/intents", { ...base, amountIn: "0" })).status).toBe(400);
+    expect((await call("/intents", { ...base, recipient: "0x0000000000000000000000000000000000000000" })).status).toBe(400);
+    expect((await call("/intents", { ...base, recipient: d.deployment.vault })).status).toBe(400);
+    expect((await call("/intents", { ...base, depositor: undefined })).status).toBe(400);
   });
 });

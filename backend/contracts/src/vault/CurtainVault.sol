@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
@@ -12,30 +13,37 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///
 /// Users deposit token X with an opaque `deadlineHash`; everything else about the swap (output
 /// token, recipient, minimum output, delay) lives in the operator's database. At payout time
-/// the operator swaps the vault's pooled funds through an allowlisted router (`executeSwap`)
-/// and signs a `Payout` that any keeper can submit for a fee. Payouts carry a `tag` —
-/// keccak256(depositId, secret) — instead of the deposit id, so the chain never links a
-/// deposit to its payout.
+/// the operator signs a *settlement*: one swap of pooled funds through an allowlisted router
+/// plus the payouts it funds. Any keeper can submit it and earns the keeper fees. The swap and
+/// its payouts happen in one transaction, so a deposit is never left swapped but unpaid — if a
+/// settlement doesn't land before its deadline, the input tokens are still in the vault and
+/// the escape hatch can return them (audit H-01).
+///
+/// Payouts carry a `tag` — keccak256(depositId, secret) — instead of the deposit id, so the
+/// chain never links a deposit to its payout.
 ///
 /// Escape hatch: if a deposit isn't paid, its depositor can request a refund 3 minutes after
 /// their own (hidden) deadline. Anyone holding the payout secret can block it within 10
 /// minutes by proving the deposit was already paid; otherwise the refund finalizes and the
 /// full deposit goes back to the depositor.
 ///
-/// Trust model (MVP): the operator key signs payouts to any recipient and chooses swap
-/// prices, so a stolen operator key puts pooled funds at risk. The escape hatch protects users
-/// from operator downtime, not from key theft. Swap output must land in this vault and router
-/// approvals are reset after every swap, but pricing (minOut) is the operator's call.
-contract CurtainVault is Ownable, ReentrancyGuard, EIP712 {
+/// Trust model (MVP): the operator key signs settlements, so it chooses swap prices and
+/// recipients. A stolen operator key puts pooled funds at risk, and a malicious operator can
+/// block a refund by paying 1 wei under that deposit's tag (audit M-02). The escape hatch
+/// protects users from operator downtime, not from key theft. On-chain limits that do hold:
+/// a settlement can't pay out more than its own swap produced, fees are capped, the swap
+/// output must land in this vault, and router approvals are reset after every swap.
+contract CurtainVault is Ownable2Step, ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
 
     uint64 public constant REFUND_DELAY = 3 minutes; // after the depositor's deadline
     uint64 public constant CHALLENGE_WINDOW = 10 minutes;
-    uint16 public constant MAX_FEE_BPS = 100;
+    uint16 public constant MAX_FEE_BPS = 100; // protocol fee cap: 1%
+    uint16 public constant MAX_KEEPER_FEE_BPS = 100; // keeper fee cap: 1%
+    uint256 private constant BPS = 10_000;
 
-    bytes32 public constant PAYOUT_TYPEHASH = keccak256(
-        "Payout(address recipient,address token,uint256 amount,uint256 protocolFee,uint256 keeperFee,uint256 deadline,uint256 nonce,bytes32 tag)"
-    );
+    bytes32 public constant SETTLEMENT_TYPEHASH =
+        keccak256("Settlement(bytes32 swapHash,bytes32 payoutsHash,uint256 deadline,uint256 nonce)");
 
     enum Status {
         None,
@@ -54,32 +62,44 @@ contract CurtainVault is Ownable, ReentrancyGuard, EIP712 {
         Status status;
     }
 
+    /// @dev One swap of pooled funds. If tokenIn == tokenOut nothing is swapped (a private
+    /// transfer) and `router`/`data` must be empty.
+    struct Swap {
+        address router;
+        address tokenIn;
+        uint256 amountIn;
+        address tokenOut;
+        uint256 minOut;
+        bytes data;
+    }
+
+    /// @dev One payout in the swap's output token.
     struct Payout {
         address recipient;
-        address token;
         uint256 amount; // to the recipient
         uint256 protocolFee; // to the treasury
-        uint256 keeperFee; // to whoever submits
-        uint256 deadline; // signature expiry
-        uint256 nonce;
+        uint256 keeperFee; // to whoever submits the settlement
         bytes32 tag; // keccak256(abi.encode(depositId, secret))
     }
 
     address public operator;
     address public treasury;
     uint16 public feeBps = 20;
+    bool public depositsPaused;
 
     mapping(address => bool) public allowedToken;
     mapping(address => bool) public allowedRouter;
 
     uint256 public depositCount;
     mapping(uint256 => Deposit) public deposits;
-    mapping(bytes32 => bool) public deadlineHashUsed;
+    /// @dev depositor => deadlineHash => used. Per depositor so nobody can front-run a
+    /// deposit by reusing its hash (audit M-01).
+    mapping(address => mapping(bytes32 => bool)) public deadlineHashUsed;
     mapping(uint256 => bool) public nonceUsed;
     mapping(bytes32 => bool) public tagUsed;
 
     event Deposited(uint256 indexed depositId, address indexed depositor, address indexed token, uint256 amount, bytes32 deadlineHash);
-    event Swapped(address indexed router, address indexed tokenIn, uint256 amountIn, address indexed tokenOut, uint256 amountOut);
+    event Settled(uint256 indexed nonce, address indexed tokenIn, uint256 amountIn, address indexed tokenOut, uint256 amountOut, uint256 paid, address keeper);
     event PaidOut(bytes32 indexed tag, address indexed recipient, address indexed token, uint256 amount, uint256 protocolFee, uint256 keeperFee, address keeper);
     event RefundRequested(uint256 indexed depositId, uint256 deadline);
     event RefundChallenged(uint256 indexed depositId);
@@ -89,19 +109,25 @@ contract CurtainVault is Ownable, ReentrancyGuard, EIP712 {
     event FeeSet(uint16 feeBps);
     event TokenAllowed(address indexed token, bool allowed);
     event RouterAllowed(address indexed router, bool allowed);
+    event DepositsPaused(bool paused);
 
-    error NotOperator();
     error TokenNotAllowed(address token);
     error RouterNotAllowed(address router);
     error ZeroAmount();
     error DeadlineHashReused();
+    error DepositsArePaused();
     error InsufficientOutput(uint256 received, uint256 minOut);
     error SwapCallFailed();
     error InputMismatch(uint256 spent, uint256 amountIn);
     error BadSignature();
-    error PayoutExpired();
+    error SettlementExpired();
     error NonceUsed();
     error TagUsed();
+    error BadRecipient(address recipient);
+    error FeeAboveCap();
+    error PaysMoreThanSwapped(uint256 paid, uint256 amountOut);
+    error NoPayouts();
+    error NotSwap();
     error NotDepositor();
     error WrongStatus(Status status);
     error WrongDeadline();
@@ -149,16 +175,24 @@ contract CurtainVault is Ownable, ReentrancyGuard, EIP712 {
         emit RouterAllowed(router, allowed);
     }
 
+    /// @notice Stops new deposits (e.g. while investigating a bug). Settlements and the escape
+    /// hatch keep working, so funds already in the vault can always leave.
+    function setDepositsPaused(bool paused) external onlyOwner {
+        depositsPaused = paused;
+        emit DepositsPaused(paused);
+    }
+
     // ---- deposit ----
 
     /// @notice Deposits `amount` of `token` for a swap described off-chain.
     /// `deadlineHash = keccak256(abi.encode(deadline, salt))` from the operator's intent; the
     /// depositor keeps (deadline, salt) to use the escape hatch.
     function deposit(address token, uint256 amount, bytes32 deadlineHash) external nonReentrant returns (uint256 depositId) {
+        if (depositsPaused) revert DepositsArePaused();
         if (!allowedToken[token]) revert TokenNotAllowed(token);
         if (amount == 0) revert ZeroAmount();
-        if (deadlineHashUsed[deadlineHash]) revert DeadlineHashReused();
-        deadlineHashUsed[deadlineHash] = true;
+        if (deadlineHashUsed[msg.sender][deadlineHash]) revert DeadlineHashReused();
+        deadlineHashUsed[msg.sender][deadlineHash] = true;
 
         uint256 before = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -176,66 +210,90 @@ contract CurtainVault is Ownable, ReentrancyGuard, EIP712 {
         emit Deposited(depositId, msg.sender, token, received, deadlineHash);
     }
 
-    // ---- operator: swaps ----
+    // ---- settlements (any keeper) ----
 
-    /// @notice Swaps `amountIn` of the vault's `tokenIn` for at least `minOut` of `tokenOut`
-    /// through an allowlisted router. The output must arrive in this vault, the router may
-    /// pull at most `amountIn`, and the approval is reset afterwards.
-    function executeSwap(address router, address tokenIn, uint256 amountIn, address tokenOut, uint256 minOut, bytes calldata data)
+    function hashSwap(Swap calldata s) public pure returns (bytes32) {
+        return keccak256(abi.encode(s.router, s.tokenIn, s.amountIn, s.tokenOut, s.minOut, keccak256(s.data)));
+    }
+
+    function hashPayouts(Payout[] calldata payouts) public pure returns (bytes32) {
+        return keccak256(abi.encode(payouts));
+    }
+
+    function settlementDigest(Swap calldata s, Payout[] calldata payouts, uint256 deadline, uint256 nonce)
+        public
+        view
+        returns (bytes32)
+    {
+        return _hashTypedDataV4(keccak256(abi.encode(SETTLEMENT_TYPEHASH, hashSwap(s), hashPayouts(payouts), deadline, nonce)));
+    }
+
+    /// @notice Executes an operator-signed settlement: the swap, then every payout, atomically.
+    /// Callable by anyone; the caller receives the keeper fees. Everything is fixed by the
+    /// signature, and the payouts can't exceed what the swap produced.
+    function settle(Swap calldata s, Payout[] calldata payouts, uint256 deadline, uint256 nonce, bytes calldata signature)
         external
         nonReentrant
-        returns (uint256 amountOut)
     {
-        if (msg.sender != operator) revert NotOperator();
-        if (!allowedRouter[router]) revert RouterNotAllowed(router);
-        if (!allowedToken[tokenIn]) revert TokenNotAllowed(tokenIn);
-        if (!allowedToken[tokenOut]) revert TokenNotAllowed(tokenOut);
-        if (minOut == 0) revert InsufficientOutput(0, 0);
+        if (block.timestamp > deadline) revert SettlementExpired();
+        if (nonceUsed[nonce]) revert NonceUsed();
+        if (payouts.length == 0) revert NoPayouts();
+        if (ECDSA.recover(settlementDigest(s, payouts, deadline, nonce), signature) != operator) revert BadSignature();
+        nonceUsed[nonce] = true;
 
-        uint256 inBefore = IERC20(tokenIn).balanceOf(address(this));
-        uint256 outBefore = IERC20(tokenOut).balanceOf(address(this));
+        uint256 amountOut = _swap(s);
 
-        IERC20(tokenIn).forceApprove(router, amountIn);
-        (bool ok,) = router.call(data);
+        IERC20 token = IERC20(s.tokenOut);
+        uint256 paid;
+        uint256 keeperTotal;
+        uint256 protocolTotal;
+        for (uint256 i = 0; i < payouts.length; i++) {
+            Payout calldata p = payouts[i];
+            if (p.recipient == address(0) || p.recipient == address(this)) revert BadRecipient(p.recipient);
+            if (tagUsed[p.tag]) revert TagUsed();
+            tagUsed[p.tag] = true;
+
+            uint256 gross = p.amount + p.protocolFee + p.keeperFee;
+            if (p.protocolFee * BPS > gross * feeBps || p.keeperFee * BPS > gross * MAX_KEEPER_FEE_BPS) revert FeeAboveCap();
+            paid += gross;
+            protocolTotal += p.protocolFee;
+            keeperTotal += p.keeperFee;
+
+            if (p.amount > 0) token.safeTransfer(p.recipient, p.amount);
+            emit PaidOut(p.tag, p.recipient, s.tokenOut, p.amount, p.protocolFee, p.keeperFee, msg.sender);
+        }
+        if (paid > amountOut) revert PaysMoreThanSwapped(paid, amountOut);
+        if (protocolTotal > 0) token.safeTransfer(treasury, protocolTotal);
+        if (keeperTotal > 0) token.safeTransfer(msg.sender, keeperTotal);
+
+        emit Settled(nonce, s.tokenIn, s.amountIn, s.tokenOut, amountOut, paid, msg.sender);
+    }
+
+    /// @dev Swaps through an allowlisted router; the output must land here, the router may pull
+    /// at most `amountIn`, and the approval is reset. Same-token settlements skip the swap.
+    function _swap(Swap calldata s) internal returns (uint256 amountOut) {
+        if (!allowedToken[s.tokenIn]) revert TokenNotAllowed(s.tokenIn);
+        if (!allowedToken[s.tokenOut]) revert TokenNotAllowed(s.tokenOut);
+        if (s.tokenIn == s.tokenOut) {
+            if (s.router != address(0) || s.data.length != 0) revert NotSwap();
+            return s.amountIn;
+        }
+        if (!allowedRouter[s.router]) revert RouterNotAllowed(s.router);
+        if (s.minOut == 0) revert InsufficientOutput(0, 0);
+
+        IERC20 tokenIn = IERC20(s.tokenIn);
+        uint256 inBefore = tokenIn.balanceOf(address(this));
+        uint256 outBefore = IERC20(s.tokenOut).balanceOf(address(this));
+
+        tokenIn.forceApprove(s.router, s.amountIn);
+        (bool ok,) = s.router.call(s.data);
         if (!ok) revert SwapCallFailed();
-        IERC20(tokenIn).forceApprove(router, 0);
+        tokenIn.forceApprove(s.router, 0);
 
-        uint256 spent = inBefore - IERC20(tokenIn).balanceOf(address(this));
-        if (spent > amountIn) revert InputMismatch(spent, amountIn);
-        amountOut = IERC20(tokenOut).balanceOf(address(this)) - outBefore;
-        if (amountOut < minOut) revert InsufficientOutput(amountOut, minOut);
-
-        emit Swapped(router, tokenIn, spent, tokenOut, amountOut);
-    }
-
-    // ---- payouts (any keeper) ----
-
-    function payoutDigest(Payout calldata p) public view returns (bytes32) {
-        return _hashTypedDataV4(
-            keccak256(
-                abi.encode(
-                    PAYOUT_TYPEHASH, p.recipient, p.token, p.amount, p.protocolFee, p.keeperFee, p.deadline, p.nonce, p.tag
-                )
-            )
-        );
-    }
-
-    /// @notice Executes an operator-signed payout. Callable by anyone; the caller receives
-    /// `keeperFee`. Recipient and amounts are fixed by the signature.
-    function payout(Payout calldata p, bytes calldata signature) external nonReentrant {
-        if (block.timestamp > p.deadline) revert PayoutExpired();
-        if (nonceUsed[p.nonce]) revert NonceUsed();
-        if (tagUsed[p.tag]) revert TagUsed();
-        if (ECDSA.recover(payoutDigest(p), signature) != operator) revert BadSignature();
-        nonceUsed[p.nonce] = true;
-        tagUsed[p.tag] = true;
-
-        IERC20 token = IERC20(p.token);
-        if (p.amount > 0) token.safeTransfer(p.recipient, p.amount);
-        if (p.protocolFee > 0) token.safeTransfer(treasury, p.protocolFee);
-        if (p.keeperFee > 0) token.safeTransfer(msg.sender, p.keeperFee);
-
-        emit PaidOut(p.tag, p.recipient, p.token, p.amount, p.protocolFee, p.keeperFee, msg.sender);
+        uint256 spent = inBefore - tokenIn.balanceOf(address(this));
+        if (spent > s.amountIn) revert InputMismatch(spent, s.amountIn); // defensive: approval already bounds this
+        amountOut = IERC20(s.tokenOut).balanceOf(address(this)) - outBefore;
+        if (amountOut < s.minOut) revert InsufficientOutput(amountOut, s.minOut);
     }
 
     // ---- escape hatch ----

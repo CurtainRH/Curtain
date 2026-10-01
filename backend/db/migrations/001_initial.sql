@@ -15,48 +15,49 @@ CREATE TABLE intents (
   recipient        TEXT NOT NULL,
   min_out          NUMERIC NOT NULL,
   secret           TEXT NOT NULL,                   -- payout tag = keccak256(abi.encode(depositId, secret))
+  depositor        TEXT NOT NULL,                   -- deposits are matched on (depositor, deadline_hash)
   status           TEXT NOT NULL DEFAULT 'awaiting_deposit' CHECK (status IN (
-                     'awaiting_deposit', 'deposited', 'swapping', 'payout_signed', 'paid',
+                     'awaiting_deposit', 'deposited', 'settling', 'paid',
                      'refund_requested', 'refunded', 'challenged', 'expired')),
   deposit_id       BIGINT UNIQUE,
-  depositor        TEXT,
   deposited_amount NUMERIC,
-  batch_id         BIGINT,
+  settlement_id    BIGINT,
   amount_out       NUMERIC,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX intents_due ON intents (status, pay_at);
 
-CREATE TABLE batches (
+-- One operator-signed settlement: a swap of pooled funds plus the payouts it funds, landed
+-- atomically by any keeper via CurtainVault.settle().
+CREATE TABLE settlements (
   id          BIGSERIAL PRIMARY KEY,
+  nonce       NUMERIC NOT NULL UNIQUE,
   token_in    TEXT NOT NULL,
   token_out   TEXT NOT NULL,
   amount_in   NUMERIC NOT NULL,
   min_out     NUMERIC NOT NULL,
-  amount_out  NUMERIC,
+  router      TEXT NOT NULL,
+  swap_data   TEXT NOT NULL,
+  deadline    BIGINT NOT NULL,                      -- never after any of its intents' deadlines
+  signature   TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'signed' CHECK (status IN ('signed', 'confirmed', 'expired')),
   tx_hash     TEXT,
-  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'failed')),
-  error       TEXT,
+  keeper      TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE payouts (
-  id            BIGSERIAL PRIMARY KEY,
-  intent_id     TEXT NOT NULL REFERENCES intents(id),
-  nonce         NUMERIC NOT NULL UNIQUE,
-  recipient     TEXT NOT NULL,
-  token         TEXT NOT NULL,
-  amount        NUMERIC NOT NULL,
-  protocol_fee  NUMERIC NOT NULL,
-  keeper_fee    NUMERIC NOT NULL,
-  deadline      BIGINT NOT NULL,                    -- signature expiry, never after the intent's deadline
-  tag           TEXT NOT NULL UNIQUE,
-  signature     TEXT NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'signed' CHECK (status IN ('signed', 'confirmed', 'expired')),
-  tx_hash       TEXT,
-  keeper        TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  id             BIGSERIAL PRIMARY KEY,
+  settlement_id  BIGINT NOT NULL REFERENCES settlements(id),
+  position       INTEGER NOT NULL,                  -- index in the settlement's payout array
+  intent_id      TEXT NOT NULL REFERENCES intents(id),
+  recipient      TEXT NOT NULL,
+  amount         NUMERIC NOT NULL,
+  protocol_fee   NUMERIC NOT NULL,
+  keeper_fee     NUMERIC NOT NULL,
+  tag            TEXT NOT NULL,
+  UNIQUE (settlement_id, position)
 );
 
 CREATE TABLE chain_cursor (

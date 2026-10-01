@@ -19,6 +19,8 @@ export interface IntentRequest {
   amountIn: string | bigint;
   tokenOut: string;
   recipient: string;
+  /** The address that will call deposit(). Deposits are matched on (depositor, hash). */
+  depositor: string;
   minOut: string | bigint;
   /** 0 = instant; otherwise the maximum random delay in seconds (up to 180 days). */
   delaySeconds: number;
@@ -46,10 +48,12 @@ function randomUpTo(max: number): number {
   return Number(BigInt(`0x${randomBytes(8).toString("hex")}`) % BigInt(max + 1));
 }
 
-export async function createIntent(db: Db, req: IntentRequest, allowedTokens: Set<string>, nowSec: number): Promise<Intent> {
-  for (const [k, v] of [["tokenIn", req.tokenIn], ["tokenOut", req.tokenOut], ["recipient", req.recipient]] as const) {
+export async function createIntent(db: Db, req: IntentRequest, allowedTokens: Set<string>, vault: Address, nowSec: number): Promise<Intent> {
+  for (const [k, v] of [["tokenIn", req.tokenIn], ["tokenOut", req.tokenOut], ["recipient", req.recipient], ["depositor", req.depositor]] as const) {
     if (!isAddress(v)) throw new IntentError(`${k} is not an address`);
   }
+  const recipient = getAddress(req.recipient);
+  if (BigInt(recipient) === 0n || recipient === getAddress(vault)) throw new IntentError("recipient can't be the zero address or the vault");
   const tokenIn = getAddress(req.tokenIn);
   const tokenOut = getAddress(req.tokenOut);
   if (!allowedTokens.has(tokenIn) || !allowedTokens.has(tokenOut)) throw new IntentError("token not supported");
@@ -68,10 +72,10 @@ export async function createIntent(db: Db, req: IntentRequest, allowedTokens: Se
   const id = randomBytes(16).toString("hex");
 
   await db.query(
-    `INSERT INTO intents (id, deadline_hash, deadline, salt, pay_at, mode, token_in, amount_in, token_out, recipient, min_out, secret)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    `INSERT INTO intents (id, deadline_hash, deadline, salt, pay_at, mode, token_in, amount_in, token_out, recipient, min_out, secret, depositor)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [id, deadlineHash, deadline.toString(), salt, payAt.toString(), instant ? "instant" : "delayed", tokenIn, amountIn.toString(),
-      tokenOut, getAddress(req.recipient), minOut.toString(), hex32()],
+      tokenOut, recipient, minOut.toString(), hex32(), getAddress(req.depositor)],
   );
   return { id, deadline, salt, deadlineHash, payAt };
 }

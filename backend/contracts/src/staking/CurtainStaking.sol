@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @notice Stake-to-earn with lock tiers (docs/CURTAIN_V2_SPEC.md).
@@ -17,7 +18,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// - Rewards can be claimed any time; principal only after unlock.
 /// - If stake and reward are the same token, principal is tracked separately (`totalStaked`),
 ///   so funding checks never count stakers' principal as rewards.
-contract CurtainStaking is Ownable, ReentrancyGuard {
+/// - Once a position unlocks it no longer earns its lock multiplier: anyone can `kick` it back
+///   to 1x (audit M-03). Withdrawing still requires the unlock.
+/// - While nobody is staked, the reward period is paused (extended) instead of streaming to
+///   no one, so funded rewards are never stranded (audit L-04).
+contract CurtainStaking is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant TIER_COUNT = 3;
@@ -53,6 +58,7 @@ contract CurtainStaking is Ownable, ReentrancyGuard {
     event Withdrawn(uint256 indexed positionId, address indexed owner, uint256 amount);
     event RewardPaid(uint256 indexed positionId, address indexed owner, uint256 reward);
     event RewardAdded(uint256 amount, uint256 duration, uint256 periodFinish);
+    event Kicked(uint256 indexed positionId, uint256 newWeighted);
 
     error TokensAlreadySet();
     error TokensNotSet();
@@ -64,6 +70,7 @@ contract CurtainStaking is Ownable, ReentrancyGuard {
     error PositionClosed();
     error ZeroDuration();
     error RewardTooHigh();
+    error NotKickable();
 
     constructor(address admin) Ownable(admin) {}
 
@@ -150,6 +157,19 @@ contract CurtainStaking is Ownable, ReentrancyGuard {
         emit Staked(positionId, msg.sender, amount, t, uint64(block.timestamp) + lockSeconds);
     }
 
+    /// @notice Drops an unlocked position's weight to 1x. Callable by anyone; rewards earned
+    /// so far at the old weight are kept.
+    function kick(uint256 positionId) external nonReentrant {
+        Position storage p = positions[positionId];
+        if (p.closed || block.timestamp < p.unlockAt || p.weighted <= p.amount) revert NotKickable();
+        _updateGlobal();
+        p.pending = earned(positionId);
+        p.rewardPerWeightPaid = rewardPerWeightStored;
+        totalWeighted = totalWeighted - p.weighted + p.amount;
+        p.weighted = p.amount;
+        emit Kicked(positionId, p.amount);
+    }
+
     function claim(uint256 positionId) public nonReentrant returns (uint256 reward) {
         reward = _claim(positionId);
     }
@@ -184,6 +204,15 @@ contract CurtainStaking is Ownable, ReentrancyGuard {
     }
 
     function _updateGlobal() internal {
+        if (totalWeighted == 0) {
+            // Nobody to stream to: keep the unstreamed remainder of the period for later
+            // instead of streaming it to no one.
+            if (lastUpdate < periodFinish && block.timestamp > lastUpdate) {
+                periodFinish = block.timestamp + (periodFinish - lastUpdate);
+            }
+            lastUpdate = block.timestamp < periodFinish ? block.timestamp : periodFinish;
+            return;
+        }
         rewardPerWeightStored = rewardPerWeight();
         lastUpdate = lastTimeRewardApplicable();
     }

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { migrate } from "@curtain/db";
 import { pgliteDb } from "@curtain/db/pglite";
-import { createApi, ERC20_ABI, mockRoute, Operator, VAULT_ABI } from "@curtain/operator";
+import { createApi, ERC20_ABI, mockQuoter, mockRoute, Operator, VAULT_ABI } from "@curtain/operator";
 import { getAddress, parseAbi, parseEther, type Address, type Hex } from "viem";
 import { startDevnet, type Devnet } from "../../../scripts/devnet";
 import { Keeper } from "../src/index";
@@ -37,7 +37,7 @@ beforeAll(async () => {
   const db = await pgliteDb();
   await migrate(db);
   op = new Operator({
-    db, publicClient: d.publicClient, walletClient: d.wallets.operator, chainId: 31337, vault, router, route: mockRoute,
+    db, publicClient: d.publicClient, walletClient: d.wallets.operator, chainId: 31337, vault, router, route: mockRoute, quote: mockQuoter(d.publicClient, router),
     keeperFeeBps: 5, startBlock: await d.publicClient.getBlockNumber(),
   });
   server = Bun.serve({ port: 0, fetch: createApi({ db, operator: op, vault, tokens, keeperFeeBps: 5, now: () => chainNow }) });
@@ -46,7 +46,7 @@ beforeAll(async () => {
   chainNow = await d.now();
   const res = await fetch(`http://127.0.0.1:${server.port}/intents`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tokenIn: tokens["USDG"], amountIn: parseEther("1000").toString(), tokenOut: tokens["TSLA"], recipient, minOut: parseEther("3.9").toString(), delaySeconds: 0 }),
+    body: JSON.stringify({ tokenIn: tokens["USDG"], amountIn: parseEther("1000").toString(), tokenOut: tokens["TSLA"], recipient, minOut: parseEther("3.9").toString(), delaySeconds: 0, depositor: d.wallets.user.account!.address }),
   });
   const intent = (await res.json()) as { deadlineHash: Hex };
   const user = d.wallets.user;
@@ -55,7 +55,7 @@ beforeAll(async () => {
   for (let i = 0; i < 20; i++) {
     await op.syncChain();
     await op.processDue(await d.now());
-    if ((await op.pendingPayouts(await d.now())).length > 0) break;
+    if ((await op.pendingSettlements(await d.now())).length > 0) break;
     await Bun.sleep(100);
   }
 });
@@ -75,7 +75,7 @@ describe("keeper (e2e)", () => {
     expect(await picky.tick(await d.now())).toEqual([]);
   });
 
-  it("submits the signed payout, earns the fee, and doesn't double-submit", async () => {
+  it("lands the signed settlement, earns the fee, and doesn't double-submit", async () => {
     const tsla = d.deployment.tokens["TSLA"]!;
     const keeper = new Keeper({ operatorApi: `http://127.0.0.1:${server.port}`, vault: d.deployment.vault, publicClient: d.publicClient, walletClient: d.wallets.keeper });
     const k = d.wallets.keeper.account!.address;
@@ -84,14 +84,14 @@ describe("keeper (e2e)", () => {
     const sent = await keeper.tick(await d.now());
     expect(sent.length).toBe(1);
 
-    const out = parseEther("4"); // 1000 USDG at 250/TSLA
+    const out = (parseEther("4") * 9950n) / 10000n; // 1000 USDG at 250/TSLA, minus 0.5% slippage tolerance
     const fee = (out * 5n) / 10000n;
     expect(await d.publicClient.readContract({ address: tsla, abi: ERC20_ABI, functionName: "balanceOf", args: [k] })).toBe(before + fee);
     expect(await d.publicClient.readContract({ address: tsla, abi: ERC20_ABI, functionName: "balanceOf", args: [recipient] }))
       .toBe(out - (out * 20n) / 10000n - fee);
 
-    expect(await keeper.tick(await d.now())).toEqual([]); // tag already used on-chain
+    expect(await keeper.tick(await d.now())).toEqual([]); // nonce already used on-chain
     await op.syncChain();
-    expect((await op.pendingPayouts(await d.now())).length).toBe(0);
+    expect((await op.pendingSettlements(await d.now())).length).toBe(0);
   });
 });

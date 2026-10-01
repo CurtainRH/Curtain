@@ -1,28 +1,25 @@
 /**
- * Curtain keeper: fetches signed payouts from an operator's public API and submits them to
- * CurtainVault, earning each payout's `keeperFee`. The signature fixes recipient and amounts,
- * so a keeper can't redirect anything; the worst it can do is not submit.
+ * Curtain keeper: fetches signed settlements from an operator's public API and lands them on
+ * CurtainVault, earning their keeper fees. The signature fixes the swap, recipients and
+ * amounts, so a keeper can't redirect anything; the worst it can do is not submit.
  *
- * A keeper only submits payouts whose fee covers its gas (priced in the payout token by
- * `minFee`, per token), and skips ones already submitted by someone else.
+ * Each settlement is simulated first so a keeper never pays gas for one that would revert
+ * (price moved below its minimum, already landed by another keeper, expired).
  */
 import { getAddress, parseAbi, type Address, type Hex, type PublicClient, type WalletClient } from "viem";
 
 const VAULT_ABI = parseAbi([
-  "struct Payout { address recipient; address token; uint256 amount; uint256 protocolFee; uint256 keeperFee; uint256 deadline; uint256 nonce; bytes32 tag; }",
-  "function payout(Payout p, bytes signature)",
-  "function tagUsed(bytes32) view returns (bool)",
+  "struct Swap { address router; address tokenIn; uint256 amountIn; address tokenOut; uint256 minOut; bytes data; }",
+  "struct Payout { address recipient; uint256 amount; uint256 protocolFee; uint256 keeperFee; bytes32 tag; }",
+  "function settle(Swap s, Payout[] payouts, uint256 deadline, uint256 nonce, bytes signature)",
+  "function nonceUsed(uint256) view returns (bool)",
 ]);
 
-export interface SignedPayout {
-  recipient: Address;
-  token: Address;
-  amount: string;
-  protocolFee: string;
-  keeperFee: string;
+export interface PendingSettlement {
+  swap: { router: Address; tokenIn: Address; amountIn: string; tokenOut: Address; minOut: string; data: Hex };
+  payouts: { recipient: Address; amount: string; protocolFee: string; keeperFee: string; tag: Hex }[];
   deadline: string;
   nonce: string;
-  tag: Hex;
   signature: Hex;
 }
 
@@ -31,7 +28,7 @@ export interface KeeperConfig {
   vault: Address;
   publicClient: PublicClient;
   walletClient: WalletClient;
-  /** Minimum keeper fee worth submitting for, per token (raw units). Missing token = any fee. */
+  /** Minimum total keeper fee worth submitting for, per output token (raw units). */
   minFee?: Record<string, bigint>;
   fetch?: typeof fetch;
 }
@@ -39,34 +36,35 @@ export interface KeeperConfig {
 export class Keeper {
   constructor(private cfg: KeeperConfig) {}
 
-  async pending(): Promise<SignedPayout[]> {
-    const res = await (this.cfg.fetch ?? fetch)(`${this.cfg.operatorApi}/payouts/pending`);
+  async pending(): Promise<PendingSettlement[]> {
+    const res = await (this.cfg.fetch ?? fetch)(`${this.cfg.operatorApi}/settlements/pending`);
     if (!res.ok) throw new Error(`operator API: HTTP ${res.status}`);
-    return (await res.json()) as SignedPayout[];
+    return (await res.json()) as PendingSettlement[];
   }
 
-  /** One pass: submits every worthwhile, unexpired, not-yet-submitted payout. Returns tx hashes. */
+  /** One pass: lands every worthwhile, unexpired, not-yet-landed settlement. Returns tx hashes. */
   async tick(nowSec: number): Promise<Hex[]> {
     const { publicClient, walletClient, vault } = this.cfg;
     const sent: Hex[] = [];
-    for (const p of await this.pending()) {
-      if (BigInt(p.deadline) <= BigInt(nowSec)) continue;
-      const floor = this.cfg.minFee?.[getAddress(p.token)];
-      if (floor !== undefined && BigInt(p.keeperFee) < floor) continue;
-      if (await publicClient.readContract({ address: vault, abi: VAULT_ABI, functionName: "tagUsed", args: [p.tag] })) continue;
+    for (const s of await this.pending()) {
+      if (BigInt(s.deadline) < BigInt(nowSec)) continue;
+      const fee = s.payouts.reduce((sum, p) => sum + BigInt(p.keeperFee), 0n);
+      const floor = this.cfg.minFee?.[getAddress(s.swap.tokenOut)];
+      if (floor !== undefined && fee < floor) continue;
+      if (await publicClient.readContract({ address: vault, abi: VAULT_ABI, functionName: "nonceUsed", args: [BigInt(s.nonce)] })) continue;
+      const args = [
+        { ...s.swap, amountIn: BigInt(s.swap.amountIn), minOut: BigInt(s.swap.minOut) },
+        s.payouts.map((p) => ({ recipient: p.recipient, amount: BigInt(p.amount), protocolFee: BigInt(p.protocolFee), keeperFee: BigInt(p.keeperFee), tag: p.tag })),
+        BigInt(s.deadline), BigInt(s.nonce), s.signature,
+      ] as const;
       try {
-        const hash = await walletClient.writeContract({
-          chain: walletClient.chain, account: walletClient.account!, address: vault, abi: VAULT_ABI, functionName: "payout",
-          args: [{
-            recipient: p.recipient, token: p.token, amount: BigInt(p.amount), protocolFee: BigInt(p.protocolFee),
-            keeperFee: BigInt(p.keeperFee), deadline: BigInt(p.deadline), nonce: BigInt(p.nonce), tag: p.tag,
-          }, p.signature],
-        });
+        const { request } = await publicClient.simulateContract({ account: walletClient.account!, address: vault, abi: VAULT_ABI, functionName: "settle", args });
+        const hash = await walletClient.writeContract({ ...request, chain: walletClient.chain });
         const r = await publicClient.waitForTransactionReceipt({ hash });
         if (r.status === "success") sent.push(hash);
       } catch (e) {
-        // Usually another keeper won the race (TagUsed); nothing to do.
-        console.error(`payout ${p.tag}: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+        // Usually: another keeper won the race, or the price moved below the minimum.
+        console.error(`settlement ${s.nonce}: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
       }
     }
     return sent;

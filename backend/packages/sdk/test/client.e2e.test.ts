@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { migrate } from "@curtain/db";
 import { pgliteDb } from "@curtain/db/pglite";
-import { createApi, mockRoute, Operator } from "@curtain/operator";
+import { createApi, mockQuoter, mockRoute, Operator } from "@curtain/operator";
 import { parseAbi, parseEther, type Address, type Hex } from "viem";
 import { startDevnet, type Devnet } from "../../../scripts/devnet";
 import { CurtainClient, ERC20_ABI, STAKING_ABI } from "../src/index";
@@ -45,7 +45,7 @@ beforeAll(async () => {
   await migrate(db);
   op = new Operator({
     db, publicClient: d.publicClient, walletClient: d.wallets.operator, chainId: 31337, vault: d.deployment.vault,
-    router: d.deployment.router, route: mockRoute, keeperFeeBps: 5, startBlock: await d.publicClient.getBlockNumber(),
+    router: d.deployment.router, route: mockRoute, quote: mockQuoter(d.publicClient, d.deployment.router), keeperFeeBps: 5, startBlock: await d.publicClient.getBlockNumber(),
   });
   chainNow = await d.now();
   server = Bun.serve({ port: 0, fetch: createApi({ db, operator: op, vault: d.deployment.vault, tokens, keeperFeeBps: 5, now: () => chainNow }) });
@@ -63,7 +63,7 @@ async function operatorTick() {
   const now = await d.now();
   await op.syncChain();
   await op.processDue(now);
-  await op.submitPayouts(now);
+  await op.submitSettlements(now);
   await op.syncChain();
 }
 

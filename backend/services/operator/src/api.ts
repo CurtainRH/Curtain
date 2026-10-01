@@ -3,11 +3,11 @@
  *
  *   GET  /health
  *   GET  /config                  vault, tokens, fees, limits
- *   POST /intents                 { tokenIn, amountIn, tokenOut, recipient, minOut, delaySeconds }
+ *   POST /intents                 { tokenIn, amountIn, tokenOut, recipient, depositor, minOut, delaySeconds }
  *                                 -> { id, deadline, salt, deadlineHash, vault }
  *                                 Keep `deadline` and `salt`: they unlock the escape hatch.
  *   GET  /intents/:id             status of your swap
- *   GET  /payouts/pending         signed payouts any keeper may submit (keeper earns keeperFee)
+ *   GET  /settlements/pending     signed settlements any keeper may submit (keeper earns the fees)
  */
 import type { Address } from "viem";
 import type { Db } from "@curtain/db";
@@ -52,24 +52,25 @@ export function createApi(cfg: ApiConfig): (req: Request) => Promise<Response> {
           amountIn: String(body["amountIn"]),
           tokenOut: String(body["tokenOut"]),
           recipient: String(body["recipient"]),
+          depositor: String(body["depositor"]),
           minOut: String(body["minOut"]),
           delaySeconds: Number(body["delaySeconds"] ?? 0),
-        }, allowed, now());
+        }, allowed, cfg.vault, now());
         return json({ id: intent.id, deadline: intent.deadline, salt: intent.salt, deadlineHash: intent.deadlineHash, vault: cfg.vault }, 201);
       }
 
       const m = url.pathname.match(/^\/intents\/([0-9a-f]{32})$/);
       if (req.method === "GET" && m) {
         const rows = await cfg.db.query<Record<string, unknown>>(
-          `SELECT i.status, i.deposit_id::text AS "depositId", i.amount_out::text AS "amountOut", p.tx_hash AS "payoutTx"
-           FROM intents i LEFT JOIN payouts p ON p.intent_id = i.id AND p.status = 'confirmed' WHERE i.id = $1`,
+          `SELECT i.status, i.deposit_id::text AS "depositId", i.amount_out::text AS "amountOut", s.tx_hash AS "payoutTx"
+           FROM intents i LEFT JOIN settlements s ON s.id = i.settlement_id AND s.status = 'confirmed' WHERE i.id = $1`,
           [m[1]],
         );
         return rows[0] ? json(rows[0]) : json({ error: "unknown intent" }, 404);
       }
 
-      if (req.method === "GET" && url.pathname === "/payouts/pending") {
-        return json(await cfg.operator.pendingPayouts(now()));
+      if (req.method === "GET" && url.pathname === "/settlements/pending") {
+        return json(await cfg.operator.pendingSettlements(now()));
       }
 
       return json({ error: "not found" }, 404);
