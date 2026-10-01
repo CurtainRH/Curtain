@@ -27,6 +27,7 @@ export ADMIN_ADDR=0x...
 export OPERATOR_ADDR=0x...
 export TREASURY_ADDR=0x...
 export DEX_ROUTER_ADDR=0xcaf681a66d020601342297493863e78c959e5cb2   # Uniswap SwapRouter02 on Robinhood Chain
+export V4_POOL_MANAGER_ADDR=0x8366a39cc670b4001a1121b8f6a443a643e40951   # Uniswap v4 PoolManager (deploys the v4 adapter)
 export TOKEN_ADDRS=0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168,0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC,0x322F0929c4625eD5bAd873c95208D54E1c003b2d,0x117cc2133c37B721F49dE2A7a74833232B3B4C0C,0xD5f3879160bc7c32ebb4dC785F8a4F505888de68
 #                   USDG,                                         NVDA,                                         TSLA,                                         SPY,                                          QQQ
 
@@ -34,7 +35,7 @@ forge script script/Deploy.s.sol --rpc-url https://rpc.mainnet.chain.robinhood.c
 ```
 
 - The script refuses to run on mainnet with a missing address, or with a token or router that has no code.
-- It writes `deployments/4663.json` with the vault, staking and token addresses. Commit that file.
+- It writes `deployments/4663.json` with the vault, staking, v4 adapter and token addresses. Commit that file.
 - Note the block number of the deployment transaction. That's `START_BLOCK` below.
 - If `ADMIN_ADDR` differs from the deployer, the script starts a two-step ownership transfer of the vault. The admin must call `acceptOwnership()` on the vault to finish it. Staking is owned by the admin from the start.
 
@@ -50,6 +51,7 @@ forge script script/Deploy.s.sol --rpc-url https://rpc.mainnet.chain.robinhood.c
    | `KEEPER_PRIVATE_KEY` | keeper | The keeper wallet's key |
    | `VAULT_ADDR` | operator, keeper | `vault` from `deployments/4663.json` |
    | `TOKENS` | operator | `tokens` from `deployments/4663.json`, as JSON |
+   | `V4_ADAPTER_ADDR` | operator | `v4Adapter` from `deployments/4663.json` (enables Uniswap v4 routing) |
    | `START_BLOCK` | operator | The vault's deployment block |
 
 3. Deploy. The operator creates its database tables on start.

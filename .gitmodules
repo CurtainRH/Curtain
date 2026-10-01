@@ -4,3 +4,6 @@
 [submodule "backend/contracts/lib/openzeppelin-contracts"]
 	path = backend/contracts/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "backend/contracts/lib/v4-core"]
+	path = backend/contracts/lib/v4-core
+	url = https://github.com/Uniswap/v4-core

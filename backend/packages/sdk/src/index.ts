@@ -15,6 +15,7 @@ import { decodeEventLog, type Address, type Hex, type PublicClient, type WalletC
 import { ERC20_ABI, STAKING_ABI, VAULT_ABI } from "./abi";
 
 export * from "./abi";
+export * from "./tokens";
 
 export const REFUND_DELAY_SECONDS = 180;
 export const CHALLENGE_WINDOW_SECONDS = 600;

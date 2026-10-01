@@ -4,8 +4,10 @@
  *   OPERATOR_PRIVATE_KEY   the vault's operator key (signs payouts, runs swaps)
  *   VAULT_ADDR, DEX_ROUTER_ADDR
  *   TOKENS                 JSON {"USDG":"0x...","NVDA":"0x...",...}
- *   ROUTE                  "uniswap-v3" (default) or "mock" (local chains)
- *   UNISWAP_QUOTER_ADDR    QuoterV2 (required for uniswap-v3); every fee tier is quoted, the best is used
+ *   UNISWAP_QUOTER_ADDR    v3 QuoterV2 (required for uniswap); every fee tier is quoted
+ *   V4_ADAPTER_ADDR        UniswapV4Adapter from the deployment (optional: enables v4 routing)
+ *   V4_QUOTER_ADDR         Uniswap V4Quoter (with V4_ADAPTER_ADDR)
+ *   ROUTE                  "uniswap" (default: best of v3 and v4) or "mock" (local chains)
  *   SLIPPAGE_BPS           default 50
  *   KEEPER_FEE_BPS         default 5
  *   PORT / OPERATOR_PORT   listen port (Render sets PORT), default 3100
@@ -18,7 +20,7 @@ import { createPublicClient, createWalletClient, defineChain, http, type Address
 import { privateKeyToAccount } from "viem/accounts";
 import { createApi } from "./api";
 import { Operator } from "./operator";
-import { mockQuoter, mockRoute, uniswapV3Quoter, uniswapV3Route } from "./routes";
+import { mockQuoter, mockRoute, uniswapQuoter, uniswapRoute } from "./routes";
 
 const env = (k: string, d?: string) => {
   const v = process.env[k] ?? d;
@@ -39,11 +41,14 @@ await migrate(db);
 const vault = env("VAULT_ADDR") as Address;
 const router = env("DEX_ROUTER_ADDR") as Address;
 const keeperFeeBps = Number(env("KEEPER_FEE_BPS", "5"));
-const mock = env("ROUTE", "uniswap-v3") === "mock";
+const mock = env("ROUTE", "uniswap") === "mock";
 const operator = new Operator({
   db, publicClient, walletClient, chainId, vault, router,
-  route: mock ? mockRoute : uniswapV3Route(3000),
-  quote: mock ? mockQuoter(publicClient, router) : uniswapV3Quoter(publicClient, env("UNISWAP_QUOTER_ADDR") as Address),
+  route: mock ? mockRoute : uniswapRoute(),
+  quote: mock ? mockQuoter(publicClient, router) : uniswapQuoter({
+    client: publicClient, v3Router: router, v3Quoter: env("UNISWAP_QUOTER_ADDR") as Address,
+    v4Adapter: process.env["V4_ADAPTER_ADDR"] as Address | undefined, v4Quoter: process.env["V4_QUOTER_ADDR"] as Address | undefined,
+  }),
   slippageBps: Number(env("SLIPPAGE_BPS", "50")),
   keeperFeeBps,
   startBlock: process.env["START_BLOCK"] ? BigInt(process.env["START_BLOCK"]) : await publicClient.getBlockNumber(),

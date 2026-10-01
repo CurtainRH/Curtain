@@ -29,7 +29,9 @@ services:
       - { key: TOKENS, sync: false }                # JSON {"USDG":"0x...","NVDA":"0x...",...}
       - { key: DEX_ROUTER_ADDR, value: "0xcaf681a66d020601342297493863e78c959e5cb2" }   # Uniswap SwapRouter02
       - { key: UNISWAP_QUOTER_ADDR, value: "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7" } # Uniswap QuoterV2
-      - { key: ROUTE, value: uniswap-v3 }
+      - { key: ROUTE, value: uniswap }                # best of Uniswap v3 and v4 per swap
+      - { key: V4_ADAPTER_ADDR, sync: false }       # v4Adapter from contracts/deployments/4663.json
+      - { key: V4_QUOTER_ADDR, value: "0x8dc178efb8111bb0973dd9d722ebeff267c98f94" }    # Uniswap V4Quoter
       - { key: SLIPPAGE_BPS, value: "50" }
       - { key: KEEPER_FEE_BPS, value: "5" }
       - { key: TICK_MS, value: "5000" }

@@ -35,7 +35,7 @@ import {
 } from "viem";
 import type { Db } from "@curtain/db";
 import { hashPayouts, hashSwap, SETTLEMENT_TYPES, VAULT_ABI, type PayoutStruct, type SwapStruct } from "@curtain/sdk/abi";
-import type { Quoter, RouteBuilder } from "./routes";
+import type { Quote, Quoter, RouteBuilder } from "./routes";
 
 export interface OperatorConfig {
   db: Db;
@@ -43,6 +43,7 @@ export interface OperatorConfig {
   walletClient: WalletClient; // the operator key
   chainId: number;
   vault: Address;
+  /** Default router (mock / v3); a quote can pick another, e.g. the v4 adapter. */
   router: Address;
   route: RouteBuilder;
   quote: Quoter;
@@ -340,13 +341,12 @@ export class Operator {
     // price (or refund at their deadline). Repeat until the remaining set is consistent.
     let minOut = 0n;
     let totalIn = 0n;
-    let fee: number | undefined;
+    let picked: Quote = { amountOut: 0n };
     for (;;) {
       totalIn = intents.reduce((s, i) => s + BigInt(i.deposited_amount), 0n);
       if (totalIn === 0n) return null;
-      const quote = tokenIn === tokenOut ? { amountOut: totalIn } : await this.cfg.quote(tokenIn, tokenOut, totalIn);
-      fee = quote.fee;
-      minOut = tokenIn === tokenOut ? totalIn : (quote.amountOut * (BPS - this.slippage)) / BPS;
+      picked = tokenIn === tokenOut ? { amountOut: totalIn } : await this.cfg.quote(tokenIn, tokenOut, totalIn);
+      minOut = tokenIn === tokenOut ? totalIn : (picked.amountOut * (BPS - this.slippage)) / BPS;
       const ok = intents.filter((i) => this.netFor(i, minOut, totalIn, feeBps, keeperBps) >= this.minNet(i));
       if (ok.length === intents.length) break;
       intents = ok;
@@ -370,8 +370,8 @@ export class Operator {
     }
     const swap: SwapStruct = tokenIn === tokenOut
       ? { router: ZERO, tokenIn, amountIn: totalIn, tokenOut, minOut: 0n, data: "0x" }
-      : { router: this.cfg.router, tokenIn, amountIn: totalIn, tokenOut, minOut: paid,
-          data: this.cfg.route({ vault: this.cfg.vault, tokenIn, tokenOut, amountIn: totalIn, minOut: paid, fee }) };
+      : { router: picked.router ?? this.cfg.router, tokenIn, amountIn: totalIn, tokenOut, minOut: paid,
+          data: this.cfg.route({ vault: this.cfg.vault, tokenIn, tokenOut, amountIn: totalIn, minOut: paid, fee: picked.fee, v4: picked.v4 }) };
     const earliest = Math.min(...intents.map((i) => Number(i.deadline)));
     const deadline = BigInt(Math.min(earliest, nowSec + this.ttl));
     const nonce = BigInt(`0x${randomBytes(16).toString("hex")}`);
