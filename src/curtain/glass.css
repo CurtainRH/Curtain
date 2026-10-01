@@ -1,0 +1,114 @@
+/* Liquid-glass entrance invitation. Loaded after immersive.css so these rules win. */
+
+/* Curtains stay opaque even before (or without) the velvet image loading. */
+.entrance-left,
+.entrance-right {
+  background-color: #1a0610;
+}
+
+.entrance-invitation {
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 56px 48px 44px;
+  border-radius: 36px;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    linear-gradient(160deg, rgb(255 255 255 / 0.16) 0%, rgb(255 255 255 / 0.05) 38%, rgb(255 255 255 / 0.02) 62%, rgb(255 255 255 / 0.09) 100%),
+    rgb(10 14 24 / 0.42);
+  -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(0.9);
+  backdrop-filter: blur(28px) saturate(180%) brightness(0.9);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.45),
+    inset 0 -1px 0 rgb(255 255 255 / 0.1),
+    inset 1px 0 0 rgb(255 255 255 / 0.12),
+    inset -1px 0 0 rgb(255 255 255 / 0.06),
+    inset 0 0 40px rgb(210 174 111 / 0.08),
+    0 30px 80px rgb(0 0 0 / 0.55),
+    0 2px 6px rgb(0 0 0 / 0.3);
+}
+
+/* Specular sheen across the top edge, like light catching curved glass. */
+.entrance-invitation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    radial-gradient(120% 60% at 20% -10%, rgb(255 255 255 / 0.28), transparent 55%),
+    radial-gradient(80% 50% at 110% 110%, rgb(210 174 111 / 0.14), transparent 60%);
+  pointer-events: none;
+}
+
+/* Refractive rim: a thin bright ring that fades toward the bottom. */
+.entrance-invitation::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.08) 40%, rgb(210 174 111 / 0.25));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  pointer-events: none;
+}
+
+.entrance-invitation h2 {
+  font-size: clamp(2.4rem, 5vw, 4.6rem);
+  text-shadow: 0 2px 24px rgb(0 0 0 / 0.45);
+}
+
+.raise-curtain {
+  gap: 18px;
+  padding: 14px 30px;
+  border: 1px solid rgb(210 174 111 / 0.55);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0.03));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.35),
+    0 8px 24px rgb(0 0 0 / 0.35);
+  transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.raise-curtain:hover {
+  background: linear-gradient(180deg, rgb(210 174 111 / 0.28), rgb(210 174 111 / 0.08));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.45),
+    0 10px 30px rgb(210 174 111 / 0.2);
+}
+
+@media (max-width: 760px) {
+  .entrance-invitation {
+    padding: 40px 20px 32px;
+    border-radius: 28px;
+  }
+
+  .entrance-invitation h2 {
+    font-size: clamp(2rem, 9vw, 3.25rem);
+  }
+}
+
+/* No backdrop-filter support: fall back to a denser tint so text stays legible. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .entrance-invitation {
+    background: rgb(12 16 28 / 0.88);
+  }
+}
+
+/* Real token logos inside the round token badges (Dashboard). */
+.token-icon {
+  overflow: hidden;
+  padding: 0;
+}
+
+.token-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

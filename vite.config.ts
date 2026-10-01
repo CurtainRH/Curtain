@@ -6,7 +6,17 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+// Curtain media (images, films, fonts) is hosted by Lovable under /__l5e/. Lovable serves that
+// path itself; everywhere else (local dev, preview) proxy it to the published Lovable site.
+const lovableAssets = {
+  "/__l5e": { target: "https://curtainlah.lovable.app", changeOrigin: true },
+};
+
 export default defineConfig({
+  vite: {
+    server: { proxy: lovableAssets },
+    preview: { proxy: lovableAssets },
+  },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
