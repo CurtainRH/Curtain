@@ -25,6 +25,34 @@ export const TIERS = [
   { tier: 2, days: 180, multiplier: 2 },
 ] as const;
 
+/** Intent lifecycle, as reported by GET /intents/:id. */
+export type IntentStatus =
+  | "awaiting_deposit" // intent created, deposit not seen yet
+  | "deposited"        // deposit seen, waiting for its payout time (or a better price)
+  | "settling"         // settlement signed, waiting for a keeper to land it
+  | "paid"             // output delivered to the recipient
+  | "blocked"          // the output token refuses this recipient: refund via the escape hatch
+  | "expired"          // deposit didn't match the intent (wrong token): refund via the escape hatch
+  | "refund_requested" // escape hatch started; finalize after 10 minutes
+  | "refunded"         // deposit returned
+  | "challenged";      // a refund was requested for a deposit that had already been paid
+
+export interface SwapQuote {
+  amountIn: string;
+  /** Raw market output before fees and tolerances. */
+  marketOut: string;
+  /** What the recipient should get if settled now (after protocol + keeper fees). */
+  expectedOut: string;
+  /** expectedOut minus the requested slippage: pass as `minOut`. */
+  minOutSuggested: string;
+  protocolFee: string;
+  keeperFee: string;
+  /** e.g. "uniswap-v4 0.3%", "uniswap-v3 0.05%", or "none" for same-token transfers. */
+  venue: string;
+  /** False when no pool can fill the swap right now. */
+  available: boolean;
+}
+
 export interface SwapParams {
   tokenIn: Address;
   amountIn: bigint;
@@ -76,7 +104,13 @@ export class CurtainClient {
   }
 
   status(intentId: string) {
-    return this.api<{ status: string; depositId: string | null; amountOut: string | null; payoutTx: string | null }>(`/intents/${intentId}`);
+    return this.api<{ status: IntentStatus; depositId: string | null; amountOut: string | null; payoutTx: string | null; blockedReason: string | null }>(`/intents/${intentId}`);
+  }
+
+  /** Expected output for a swap right now, after fees. Use `minOutSuggested` as `minOut`. */
+  quote(tokenIn: Address, tokenOut: Address, amountIn: bigint, slippageBps = 100) {
+    const q = new URLSearchParams({ tokenIn, tokenOut, amountIn: amountIn.toString(), slippageBps: String(slippageBps) });
+    return this.api<SwapQuote>(`/quote?${q}`);
   }
 
   /** Creates the intent, approves the vault if needed, and deposits. */
@@ -188,4 +222,35 @@ export class CurtainClient {
     await this.send(hash);
     return hash;
   }
+}
+
+export interface StakePosition {
+  id: bigint;
+  amount: bigint;
+  weighted: bigint;
+  unlockAt: number;
+  earned: bigint;
+  closed: boolean;
+}
+
+/**
+ * A wallet's staking positions. The contract has no per-owner index, so this reads the
+ * `Staked(positionId, owner, ...)` events for `owner` (owner is indexed) from `fromBlock`
+ * (the staking contract's deployment block), then each position's current state.
+ */
+export async function positionsOf(
+  publicClient: PublicClient,
+  staking: Address,
+  owner: Address,
+  fromBlock: bigint,
+): Promise<StakePosition[]> {
+  const logs = await publicClient.getContractEvents({ address: staking, abi: STAKING_ABI, eventName: "Staked", args: { owner }, fromBlock });
+  const out: StakePosition[] = [];
+  for (const l of logs) {
+    const id = (l.args as { positionId: bigint }).positionId;
+    const [, amount, weighted, unlockAt, , , closed] = await publicClient.readContract({ address: staking, abi: STAKING_ABI, functionName: "positions", args: [id] });
+    const earned = closed ? 0n : await publicClient.readContract({ address: staking, abi: STAKING_ABI, functionName: "earned", args: [id] });
+    out.push({ id, amount, weighted, unlockAt: Number(unlockAt), earned, closed });
+  }
+  return out;
 }

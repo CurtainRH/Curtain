@@ -8,7 +8,7 @@ import { pgliteDb } from "@curtain/db/pglite";
 import { createApi, mockQuoter, mockRoute, Operator } from "@curtain/operator";
 import { parseAbi, parseEther, type Address, type Hex } from "viem";
 import { startDevnet, type Devnet } from "../../../scripts/devnet";
-import { CurtainClient, ERC20_ABI, STAKING_ABI } from "../src/index";
+import { CurtainClient, ERC20_ABI, positionsOf, STAKING_ABI } from "../src/index";
 
 setDefaultTimeout(180_000);
 const MOCK = parseAbi(["function mint(address to, uint256 amount)", "function setRate(address tokenIn, address tokenOut, uint256 rateWad)"]);
@@ -109,6 +109,10 @@ describe("CurtainClient (e2e)", () => {
     await tx(d.deployment.staking, STAKING_ABI, "notifyRewardAmount", [parseEther("18000"), 180n * 86400n]);
 
     const id = await client.stake(hood, parseEther("1000"), 2);
+    const positions = await positionsOf(d.publicClient, d.deployment.staking, me, 0n);
+    expect(positions.map((p) => p.id)).toEqual([id]);
+    expect(positions[0]!.amount).toBe(parseEther("1000"));
+    expect(positions[0]!.weighted).toBe(parseEther("2000")); // 180-day tier, 2x
     await warp(90 * 86400);
     expect(await client.earned(id)).toBeGreaterThan(parseEther("8900")); // ~half of 18k: the only staker
     await expect(client.withdraw(id)).rejects.toThrow(); // still locked

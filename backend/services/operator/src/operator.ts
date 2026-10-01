@@ -476,6 +476,34 @@ export class Operator {
     return sent;
   }
 
+  // ---------------------------------------------------------------- quotes for the UI
+
+  /**
+   * What a swap of `amountIn` would pay the recipient right now, using the same quoter and
+   * slippage tolerance the settlement will. `minOutSuggested` leaves a further `userSlippageBps`
+   * (default 100 = 1%) for the price to move before the user's deposit is settled.
+   */
+  async quoteForUser(tokenIn: Address, tokenOut: Address, amountIn: bigint, userSlippageBps = 100) {
+    const feeBps = BigInt(await this.feeBps());
+    const keeperBps = BigInt(this.cfg.keeperFeeBps);
+    const same = getAddress(tokenIn) === getAddress(tokenOut);
+    const q: Quote = same ? { amountOut: amountIn } : await this.cfg.quote(getAddress(tokenIn), getAddress(tokenOut), amountIn);
+    const gross = same ? amountIn : (q.amountOut * (BPS - this.slippage)) / BPS;
+    const protocolFee = (gross * feeBps) / BPS;
+    const keeperFee = (gross * keeperBps) / BPS;
+    const expectedOut = gross - protocolFee - keeperFee;
+    return {
+      amountIn: amountIn.toString(),
+      marketOut: q.amountOut.toString(),
+      expectedOut: expectedOut.toString(),
+      minOutSuggested: ((expectedOut * (BPS - BigInt(userSlippageBps))) / BPS).toString(),
+      protocolFee: protocolFee.toString(),
+      keeperFee: keeperFee.toString(),
+      venue: same ? "none" : q.v4 ? `uniswap-v4 ${q.v4.key.fee / 10000}%` : q.fee !== undefined ? `uniswap-v3 ${q.fee / 10000}%` : "router",
+      available: q.amountOut > 0n,
+    };
+  }
+
   // ---------------------------------------------------------------- monitoring
 
   private lastTickAt = 0;

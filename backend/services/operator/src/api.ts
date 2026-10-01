@@ -4,13 +4,14 @@
  *   GET  /health                  liveness (always 200 while the process serves)
  *   GET  /status                  200 when healthy, 503 + problems when it needs attention
  *   GET  /config                  vault, tokens, fees, limits
+ *   GET  /quote?tokenIn&tokenOut&amountIn[&slippageBps]   expected output after fees, suggested minOut
  *   POST /intents                 { tokenIn, amountIn, tokenOut, recipient, depositor, minOut, delaySeconds }
  *                                 -> { id, deadline, salt, deadlineHash, vault }
  *                                 Keep `deadline` and `salt`: they unlock the escape hatch.
  *   GET  /intents/:id             status of your swap
  *   GET  /settlements/pending     signed settlements any keeper may submit (keeper earns the fees)
  */
-import { getAddress, type Address } from "viem";
+import { getAddress, isAddress, type Address } from "viem";
 import type { Db } from "@curtain/db";
 import { createIntent, IntentError, MAX_DELAY_SECONDS } from "./intents";
 import type { Operator } from "./operator";
@@ -52,6 +53,19 @@ export function createApi(cfg: ApiConfig): (req: Request) => Promise<Response> {
 
       if (req.method === "GET" && url.pathname === "/config") {
         return json({ vault: cfg.vault, tokens: cfg.tokens, keeperFeeBps: cfg.keeperFeeBps, maxDelaySeconds: MAX_DELAY_SECONDS });
+      }
+
+      if (req.method === "GET" && url.pathname === "/quote") {
+        const tokenIn = url.searchParams.get("tokenIn") ?? "";
+        const tokenOut = url.searchParams.get("tokenOut") ?? "";
+        const amountIn = url.searchParams.get("amountIn") ?? "";
+        if (!isAddress(tokenIn) || !isAddress(tokenOut) || !/^[1-9]\d*$/.test(amountIn)) {
+          return json({ error: "tokenIn, tokenOut (addresses) and amountIn (raw units, > 0) are required" }, 400);
+        }
+        if (!allowed.has(getAddress(tokenIn)) || !allowed.has(getAddress(tokenOut))) return json({ error: "token not supported" }, 400);
+        const slippage = Number(url.searchParams.get("slippageBps") ?? 100);
+        if (!(slippage >= 0 && slippage <= 5000)) return json({ error: "slippageBps must be 0..5000" }, 400);
+        return json(await cfg.operator.quoteForUser(getAddress(tokenIn), getAddress(tokenOut), BigInt(amountIn), slippage));
       }
 
       if (req.method === "POST" && url.pathname === "/intents") {

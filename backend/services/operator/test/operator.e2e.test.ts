@@ -257,6 +257,18 @@ describe("private swap lifecycle (e2e)", () => {
     expect(BigInt(after.body.operatorBalanceWei)).toBeGreaterThan(0n);
   });
 
+  it("GET /quote returns the expected output after fees and a suggested minimum", async () => {
+    const { status, body } = await call(`/quote?tokenIn=${usdg}&tokenOut=${nvda}&amountIn=${parseEther("1000")}`);
+    expect(status).toBe(200);
+    const gross = (parseEther("5") * 9950n) / 10000n; // 200 USDG/NVDA, 0.5% operator tolerance
+    const expected = gross - (gross * 20n) / 10000n - (gross * 5n) / 10000n;
+    expect(body.marketOut).toBe(parseEther("5").toString());
+    expect(body.expectedOut).toBe(expected.toString());
+    expect(body.minOutSuggested).toBe(((expected * 9900n) / 10000n).toString());
+    expect(body.available).toBe(true);
+    expect((await call(`/quote?tokenIn=${usdg}&tokenOut=${nvda}&amountIn=0`)).status).toBe(400);
+  });
+
   it("rejects bad intents", async () => {
     const depositor = d.wallets.user.account!.address;
     const base = { tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, depositor, minOut: "1", delaySeconds: 0 };
