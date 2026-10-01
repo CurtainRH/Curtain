@@ -64,6 +64,13 @@ export async function startDevnet(port: number): Promise<Devnet> {
     }
   }
 
+  // Full build so tests can deploy extra contracts (mocks) from contracts/out.
+  const build = spawnSync("forge", ["build", "--silent"], { cwd: CONTRACTS_DIR, encoding: "utf-8" });
+  if (build.status !== 0) {
+    anvil.kill();
+    throw new Error(`forge build failed:\n${build.stdout}\n${build.stderr}`);
+  }
+
   const addr = (k: Hex) => privateKeyToAccount(k).address;
   // --slow: one tx at a time; parallel broadcasting occasionally drops one on anvil.
   const out = spawnSync("forge", ["script", "script/Deploy.s.sol", "--rpc-url", rpcUrl, "--broadcast", "--slow", "--silent"], {

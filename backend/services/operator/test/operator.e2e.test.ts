@@ -225,6 +225,16 @@ describe("private swap lifecycle (e2e)", () => {
     expect(await db.query("SELECT id, status FROM intents ORDER BY id")).toEqual(before);
   });
 
+  it("accepts token addresses in any casing from config", async () => {
+    const lower = Object.fromEntries(Object.entries(d.deployment.tokens).map(([k, v]) => [k, v.toLowerCase() as Address]));
+    const api2 = createApi({ db, operator: op, vault: d.deployment.vault, tokens: lower, keeperFeeBps: 5, now: () => chainNow });
+    const res = await api2(new Request("http://op/intents", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, depositor: d.wallets.user.account!.address, minOut: "1", delaySeconds: 0 }),
+    }));
+    expect(res.status).toBe(201);
+  });
+
   it("rejects bad intents", async () => {
     const depositor = d.wallets.user.account!.address;
     const base = { tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, depositor, minOut: "1", delaySeconds: 0 };

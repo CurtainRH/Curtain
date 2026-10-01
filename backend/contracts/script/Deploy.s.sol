@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {CurtainVault} from "../src/vault/CurtainVault.sol";
 import {CurtainStaking} from "../src/staking/CurtainStaking.sol";
 import {StealthRegistry} from "../src/stealth/StealthRegistry.sol";
@@ -12,8 +13,8 @@ import {MockDexRouter} from "../test/mocks/MockDexRouter.sol";
 /// @notice Deploys Curtain v2 (docs/CURTAIN_V2_SPEC.md).
 ///
 /// On Robinhood Chain (4663): PRIVATE_KEY, ADMIN_ADDR, OPERATOR_ADDR, TREASURY_ADDR,
-/// DEX_ROUTER_ADDR and the token addresses (USDG_ADDR, NVDA_ADDR, TSLA_ADDR, SPY_ADDR,
-/// QQQ_ADDR, HOOD_ADDR) are required; no mocks are deployed.
+/// DEX_ROUTER_ADDR and TOKEN_ADDRS (comma-separated token addresses to allow) are required;
+/// symbols are read from each token. No mocks are deployed.
 /// On local chains: Anvil's public dev key, mock tokens and a mock DEX router.
 ///
 /// Staking ships with no tokens set; the admin calls `setTokens` once $CRTN launches.
@@ -23,7 +24,8 @@ contract DeployScript is Script {
     // Anvil account #0 — public, well-known, for local chains only (never used on 4663).
     uint256 internal constant ANVIL_DEV_KEY = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
-    string[6] internal symbols = ["USDG", "NVDA", "TSLA", "SPY", "QQQ", "HOOD"];
+    // Local chains only: mock tokens to deploy.
+    string[6] internal mockSymbols = ["USDG", "NVDA", "TSLA", "SPY", "QQQ", "HOOD"];
 
     function run() external {
         bool production = block.chainid == RHC_CHAIN_ID;
@@ -40,16 +42,17 @@ contract DeployScript is Script {
         CurtainVault vault = new CurtainVault(deployer, operator, treasury);
         CurtainStaking staking = new CurtainStaking(admin);
 
-        address[6] memory tokens;
-        for (uint256 i = 0; i < symbols.length; i++) {
-            if (production) {
-                tokens[i] = vm.envAddress(string.concat(symbols[i], "_ADDR"));
-                require(tokens[i].code.length > 0, string.concat("DeployScript: no code at ", symbols[i], "_ADDR"));
-            } else {
-                tokens[i] = address(new MockERC20(symbols[i], symbols[i]));
+        address[] memory tokens;
+        if (production) {
+            tokens = vm.envAddress("TOKEN_ADDRS", ",");
+            for (uint256 i = 0; i < tokens.length; i++) {
+                require(tokens[i].code.length > 0, "DeployScript: TOKEN_ADDRS entry has no code");
             }
-            vault.setAllowedToken(tokens[i], true);
+        } else {
+            tokens = new address[](mockSymbols.length);
+            for (uint256 i = 0; i < mockSymbols.length; i++) tokens[i] = address(new MockERC20(mockSymbols[i], mockSymbols[i]));
         }
+        for (uint256 i = 0; i < tokens.length; i++) vault.setAllowedToken(tokens[i], true);
 
         address router;
         if (production) {
@@ -78,8 +81,10 @@ contract DeployScript is Script {
         vm.serializeAddress(k, "stealthRegistry", address(stealthRegistry));
         vm.serializeAddress(k, "stealthAnnouncer", address(stealthAnnouncer));
         string memory t = "tokens";
-        for (uint256 i = 0; i < symbols.length - 1; i++) vm.serializeAddress(t, symbols[i], tokens[i]);
-        string memory tokensJson = vm.serializeAddress(t, symbols[symbols.length - 1], tokens[symbols.length - 1]);
+        string memory tokensJson;
+        for (uint256 i = 0; i < tokens.length; i++) {
+            tokensJson = vm.serializeAddress(t, IERC20Metadata(tokens[i]).symbol(), tokens[i]);
+        }
         string memory json = vm.serializeString(k, "tokens", tokensJson);
         vm.writeJson(json, string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), ".json"));
 

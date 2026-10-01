@@ -5,8 +5,7 @@
  *   VAULT_ADDR, DEX_ROUTER_ADDR
  *   TOKENS                 JSON {"USDG":"0x...","NVDA":"0x...",...}
  *   ROUTE                  "uniswap-v3" (default) or "mock" (local chains)
- *   UNISWAP_FEE_TIER       default 3000
- *   UNISWAP_QUOTER_ADDR    QuoterV2 (required for uniswap-v3)
+ *   UNISWAP_QUOTER_ADDR    QuoterV2 (required for uniswap-v3); every fee tier is quoted, the best is used
  *   SLIPPAGE_BPS           default 50
  *   KEEPER_FEE_BPS         default 5
  *   OPERATOR_PORT          default 3100
@@ -40,11 +39,10 @@ const vault = env("VAULT_ADDR") as Address;
 const router = env("DEX_ROUTER_ADDR") as Address;
 const keeperFeeBps = Number(env("KEEPER_FEE_BPS", "5"));
 const mock = env("ROUTE", "uniswap-v3") === "mock";
-const feeTier = Number(env("UNISWAP_FEE_TIER", "3000"));
 const operator = new Operator({
   db, publicClient, walletClient, chainId, vault, router,
-  route: mock ? mockRoute : uniswapV3Route(feeTier),
-  quote: mock ? mockQuoter(publicClient, router) : uniswapV3Quoter(publicClient, env("UNISWAP_QUOTER_ADDR") as Address, feeTier),
+  route: mock ? mockRoute : uniswapV3Route(3000),
+  quote: mock ? mockQuoter(publicClient, router) : uniswapV3Quoter(publicClient, env("UNISWAP_QUOTER_ADDR") as Address),
   slippageBps: Number(env("SLIPPAGE_BPS", "50")),
   keeperFeeBps,
   startBlock: process.env["START_BLOCK"] ? BigInt(process.env["START_BLOCK"]) : await publicClient.getBlockNumber(),

@@ -5,7 +5,8 @@
  *                   depositor + hash), settlement landed, refund requested/challenged/finalized.
  *                   It challenges refunds for deposits that were already paid.
  * - `processDue()`  expires settlements that can no longer land, then groups due deposits by
- *                   (tokenIn, tokenOut), quotes the swap, and signs one *settlement* per group:
+ *                   (tokenIn, tokenOut), drops recipients the output token refuses, quotes the
+ *                   swap, and signs one *settlement* per group (split if needed):
  *                   the swap plus every payout it funds. Nothing is swapped until a keeper
  *                   lands the whole settlement, so an unpaid deposit is always refundable in
  *                   its own token (audit H-01).
@@ -18,7 +19,20 @@
  * after (or alongside) a refund of one of its deposits.
  */
 import { randomBytes } from "node:crypto";
-import { decodeEventLog, encodeAbiParameters, getAddress, keccak256, type Address, type Hex, type PublicClient, type WalletClient } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  decodeEventLog,
+  encodeAbiParameters,
+  encodeFunctionData,
+  getAddress,
+  keccak256,
+  parseAbi,
+  type Address,
+  type Hex,
+  type PublicClient,
+  type WalletClient,
+} from "viem";
 import type { Db } from "@curtain/db";
 import { hashPayouts, hashSwap, SETTLEMENT_TYPES, VAULT_ABI, type PayoutStruct, type SwapStruct } from "@curtain/sdk/abi";
 import type { Quoter, RouteBuilder } from "./routes";
@@ -68,6 +82,24 @@ export interface PendingSettlement {
   nonce: string;
   signature: Hex;
 }
+
+interface Fees {
+  feeBps: bigint;
+  keeperBps: bigint;
+}
+
+interface Built {
+  swap: SwapStruct;
+  payouts: PayoutStruct[];
+  rows: { intent: DueIntent; p: PayoutStruct }[];
+  deadline: bigint;
+  nonce: bigint;
+  signature: Hex;
+}
+
+/** Reverts that mean "the price moved", not "this batch is broken": retry with a new quote. */
+const PRICE_ERRORS = new Set(["InsufficientOutput", "SwapCallFailed", "PaysMoreThanSwapped"]);
+const ERC20_TRANSFER_ABI = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 
 const BPS = 10_000n;
 const ZERO: Address = "0x0000000000000000000000000000000000000000";
@@ -209,12 +241,22 @@ export class Operator {
     return expired;
   }
 
-  /** Signs settlements for every due group of deposits. Returns the new settlement ids. */
+  /**
+   * Signs settlements for every due group of deposits. Returns the new settlement ids.
+   *
+   * Recipients a token refuses (blocklists, compliance hooks) are kept out of settlements, so
+   * one bad recipient can't stall a whole batch on every retry:
+   * 1. probe: a zero-amount transfer from the vault to each recipient is simulated; tokens with
+   *    blocklists reject those too. A control transfer runs first so tokens that reject all
+   *    zero transfers don't flag everyone.
+   * 2. simulate: every settlement is simulated before it's stored. If it would revert for a
+   *    reason other than price, the group is split in half until the failing payout is found.
+   * Blocked deposits are marked `blocked`; their owners refund through the escape hatch.
+   */
   async processDue(nowSec: number): Promise<number[]> {
     await this.expireSettlements(nowSec);
     const { db } = this.cfg;
-    const feeBps = BigInt(await this.feeBps());
-    const keeperBps = BigInt(this.cfg.keeperFeeBps);
+    const fees = { feeBps: BigInt(await this.feeBps()), keeperBps: BigInt(this.cfg.keeperFeeBps) };
     const created: number[] = [];
 
     await db.transaction(async (tx) => {
@@ -230,75 +272,156 @@ export class Operator {
         const k = `${i.token_in}:${i.token_out}`;
         groups.set(k, [...(groups.get(k) ?? []), i]);
       }
-
-      for (let intents of groups.values()) {
-        const tokenIn = getAddress(intents[0]!.token_in);
-        const tokenOut = getAddress(intents[0]!.token_out);
-
-        // Drop intents whose own minimum the current price can't meet; they wait for a better
-        // price (or refund at their deadline). Repeat until the remaining set is consistent.
-        let minOut = 0n;
-        let totalIn = 0n;
-        for (;;) {
-          totalIn = intents.reduce((s, i) => s + BigInt(i.deposited_amount), 0n);
-          if (totalIn === 0n) break;
-          const quoted = tokenIn === tokenOut ? totalIn : await this.cfg.quote(tokenIn, tokenOut, totalIn);
-          minOut = tokenIn === tokenOut ? totalIn : (quoted * (BPS - this.slippage)) / BPS;
-          const ok = intents.filter((i) => this.netFor(i, minOut, totalIn, feeBps, keeperBps) >= this.minNet(i));
-          if (ok.length === intents.length) break;
-          intents = ok;
-        }
-        if (intents.length === 0 || minOut === 0n) continue;
-
-        const payouts: PayoutStruct[] = [];
-        const rows: { intent: DueIntent; p: PayoutStruct }[] = [];
-        let paid = 0n;
-        for (const i of intents) {
-          const gross = (minOut * BigInt(i.deposited_amount)) / totalIn;
-          const protocolFee = (gross * feeBps) / BPS;
-          const keeperFee = (gross * keeperBps) / BPS;
-          const p: PayoutStruct = {
-            recipient: getAddress(i.recipient), amount: gross - protocolFee - keeperFee, protocolFee, keeperFee,
-            tag: keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "bytes32" }], [BigInt(i.deposit_id), i.secret])),
-          };
-          payouts.push(p);
-          rows.push({ intent: i, p });
-          paid += gross;
-        }
-        const swap: SwapStruct = tokenIn === tokenOut
-          ? { router: ZERO, tokenIn, amountIn: totalIn, tokenOut, minOut: 0n, data: "0x" }
-          : { router: this.cfg.router, tokenIn, amountIn: totalIn, tokenOut, minOut: paid,
-              data: this.cfg.route({ vault: this.cfg.vault, tokenIn, tokenOut, amountIn: totalIn, minOut: paid }) };
-        const earliest = Math.min(...intents.map((i) => Number(i.deadline)));
-        const deadline = BigInt(Math.min(earliest, nowSec + this.ttl));
-        const nonce = BigInt(`0x${randomBytes(16).toString("hex")}`);
-        const signature = await this.cfg.walletClient.signTypedData({
-          account: this.account,
-          domain: { name: "CurtainVault", version: "1", chainId: this.cfg.chainId, verifyingContract: this.cfg.vault },
-          types: SETTLEMENT_TYPES,
-          primaryType: "Settlement",
-          message: { swapHash: hashSwap(swap), payoutsHash: hashPayouts(payouts), deadline, nonce },
-        });
-
-        const [s] = await tx.query<{ id: string }>(
-          `INSERT INTO settlements (nonce, token_in, token_out, amount_in, min_out, router, swap_data, deadline, signature)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-          [nonce.toString(), tokenIn, tokenOut, totalIn.toString(), swap.minOut.toString(), swap.router, swap.data, deadline.toString(), signature],
-        );
-        for (const [position, { intent, p }] of rows.entries()) {
-          await tx.query(
-            `INSERT INTO payouts (settlement_id, position, intent_id, recipient, amount, protocol_fee, keeper_fee, tag)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [s!.id, position, intent.id, p.recipient, p.amount.toString(), p.protocolFee.toString(), p.keeperFee.toString(), p.tag],
-          );
-          await tx.query("UPDATE intents SET status = 'settling', settlement_id = $2, amount_out = $3, updated_at = now() WHERE id = $1", [
-            intent.id, s!.id, (p.amount + p.protocolFee + p.keeperFee).toString(),
-          ]);
-        }
-        created.push(Number(s!.id));
+      for (const group of groups.values()) {
+        const reachable = await this.dropUnreachableRecipients(tx, group);
+        created.push(...(await this.settleGroup(tx, reachable, nowSec, fees)));
       }
     });
     return created;
+  }
+
+  /** Probes each recipient with a simulated zero-amount transfer from the vault. */
+  private async dropUnreachableRecipients(tx: Db, intents: DueIntent[]): Promise<DueIntent[]> {
+    if (intents.length === 0) return intents;
+    const token = getAddress(intents[0]!.token_out);
+    const probe = async (to: Address) => {
+      try {
+        await this.cfg.publicClient.call({
+          account: this.cfg.vault, to: token,
+          data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: [to, 0n] }),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!(await probe(this.account.address))) return intents; // token rejects all zero transfers: probe tells us nothing
+
+    const kept: DueIntent[] = [];
+    for (const i of intents) {
+      if (await probe(getAddress(i.recipient))) kept.push(i);
+      else await this.markBlocked(tx, i, "output token refuses transfers to this recipient");
+    }
+    return kept;
+  }
+
+  /**
+   * Builds, simulates and stores a settlement for `intents`. If the simulation reverts for a
+   * non-price reason, splits the group in half and retries each half, until single deposits
+   * that still fail are marked blocked.
+   */
+  private async settleGroup(tx: Db, intents: DueIntent[], nowSec: number, fees: Fees): Promise<number[]> {
+    const built = await this.build(intents, nowSec, fees);
+    if (!built) return [];
+    const outcome = await this.simulate(built);
+    if (outcome === "ok") return [await this.store(tx, built)];
+    if (outcome === "price") return []; // price moved: retry next tick with a fresh quote
+    if (built.rows.length === 1) {
+      await this.markBlocked(tx, built.rows[0]!.intent, `settlement reverts: ${outcome.reason}`);
+      return [];
+    }
+    const kept = built.rows.map((r) => r.intent);
+    const mid = Math.ceil(kept.length / 2);
+    return [
+      ...(await this.settleGroup(tx, kept.slice(0, mid), nowSec, fees)),
+      ...(await this.settleGroup(tx, kept.slice(mid), nowSec, fees)),
+    ];
+  }
+
+  /** Quotes and signs a settlement, dropping intents the current price can't satisfy. */
+  private async build(group: DueIntent[], nowSec: number, { feeBps, keeperBps }: Fees): Promise<Built | null> {
+    let intents = group;
+    if (intents.length === 0) return null;
+    const tokenIn = getAddress(intents[0]!.token_in);
+    const tokenOut = getAddress(intents[0]!.token_out);
+
+    // Drop intents whose own minimum the current price can't meet; they wait for a better
+    // price (or refund at their deadline). Repeat until the remaining set is consistent.
+    let minOut = 0n;
+    let totalIn = 0n;
+    let fee: number | undefined;
+    for (;;) {
+      totalIn = intents.reduce((s, i) => s + BigInt(i.deposited_amount), 0n);
+      if (totalIn === 0n) return null;
+      const quote = tokenIn === tokenOut ? { amountOut: totalIn } : await this.cfg.quote(tokenIn, tokenOut, totalIn);
+      fee = quote.fee;
+      minOut = tokenIn === tokenOut ? totalIn : (quote.amountOut * (BPS - this.slippage)) / BPS;
+      const ok = intents.filter((i) => this.netFor(i, minOut, totalIn, feeBps, keeperBps) >= this.minNet(i));
+      if (ok.length === intents.length) break;
+      intents = ok;
+    }
+    if (intents.length === 0 || minOut === 0n) return null;
+
+    const payouts: PayoutStruct[] = [];
+    const rows: Built["rows"] = [];
+    let paid = 0n;
+    for (const i of intents) {
+      const gross = (minOut * BigInt(i.deposited_amount)) / totalIn;
+      const protocolFee = (gross * feeBps) / BPS;
+      const keeperFee = (gross * keeperBps) / BPS;
+      const p: PayoutStruct = {
+        recipient: getAddress(i.recipient), amount: gross - protocolFee - keeperFee, protocolFee, keeperFee,
+        tag: keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "bytes32" }], [BigInt(i.deposit_id), i.secret])),
+      };
+      payouts.push(p);
+      rows.push({ intent: i, p });
+      paid += gross;
+    }
+    const swap: SwapStruct = tokenIn === tokenOut
+      ? { router: ZERO, tokenIn, amountIn: totalIn, tokenOut, minOut: 0n, data: "0x" }
+      : { router: this.cfg.router, tokenIn, amountIn: totalIn, tokenOut, minOut: paid,
+          data: this.cfg.route({ vault: this.cfg.vault, tokenIn, tokenOut, amountIn: totalIn, minOut: paid, fee }) };
+    const earliest = Math.min(...intents.map((i) => Number(i.deadline)));
+    const deadline = BigInt(Math.min(earliest, nowSec + this.ttl));
+    const nonce = BigInt(`0x${randomBytes(16).toString("hex")}`);
+    const signature = await this.cfg.walletClient.signTypedData({
+      account: this.account,
+      domain: { name: "CurtainVault", version: "1", chainId: this.cfg.chainId, verifyingContract: this.cfg.vault },
+      types: SETTLEMENT_TYPES,
+      primaryType: "Settlement",
+      message: { swapHash: hashSwap(swap), payoutsHash: hashPayouts(payouts), deadline, nonce },
+    });
+    return { swap, payouts, rows, deadline, nonce, signature };
+  }
+
+  /** "ok", "price" (swap output/minimum problem: retry later), or another revert reason. */
+  private async simulate(b: Built): Promise<"ok" | "price" | { reason: string }> {
+    try {
+      await this.cfg.publicClient.simulateContract({
+        account: this.account.address, address: this.cfg.vault, abi: VAULT_ABI, functionName: "settle",
+        args: [b.swap, b.payouts, b.deadline, b.nonce, b.signature],
+      });
+      return "ok";
+    } catch (e) {
+      const name = e instanceof BaseError ? (e.walk((x) => x instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null)?.data?.errorName : undefined;
+      if (name && PRICE_ERRORS.has(name)) return "price";
+      const reason = name ?? (e instanceof BaseError ? e.shortMessage : String(e));
+      return { reason: reason.slice(0, 200) };
+    }
+  }
+
+  private async store(tx: Db, b: Built): Promise<number> {
+    const [s] = await tx.query<{ id: string }>(
+      `INSERT INTO settlements (nonce, token_in, token_out, amount_in, min_out, router, swap_data, deadline, signature)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [b.nonce.toString(), b.swap.tokenIn, b.swap.tokenOut, b.swap.amountIn.toString(), b.swap.minOut.toString(), b.swap.router,
+        b.swap.data, b.deadline.toString(), b.signature],
+    );
+    for (const [position, { intent, p }] of b.rows.entries()) {
+      await tx.query(
+        `INSERT INTO payouts (settlement_id, position, intent_id, recipient, amount, protocol_fee, keeper_fee, tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [s!.id, position, intent.id, p.recipient, p.amount.toString(), p.protocolFee.toString(), p.keeperFee.toString(), p.tag],
+      );
+      await tx.query("UPDATE intents SET status = 'settling', settlement_id = $2, amount_out = $3, updated_at = now() WHERE id = $1", [
+        intent.id, s!.id, (p.amount + p.protocolFee + p.keeperFee).toString(),
+      ]);
+    }
+    return Number(s!.id);
+  }
+
+  private async markBlocked(tx: Db, i: DueIntent, reason: string): Promise<void> {
+    await tx.query("UPDATE intents SET status = 'blocked', blocked_reason = $2, updated_at = now() WHERE id = $1 AND status = 'deposited'", [i.id, reason]);
   }
 
   /** What the recipient would receive from `minOut` split pro rata, after fees. */

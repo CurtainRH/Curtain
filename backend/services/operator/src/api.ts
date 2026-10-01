@@ -9,7 +9,7 @@
  *   GET  /intents/:id             status of your swap
  *   GET  /settlements/pending     signed settlements any keeper may submit (keeper earns the fees)
  */
-import type { Address } from "viem";
+import { getAddress, type Address } from "viem";
 import type { Db } from "@curtain/db";
 import { createIntent, IntentError, MAX_DELAY_SECONDS } from "./intents";
 import type { Operator } from "./operator";
@@ -31,7 +31,7 @@ const json = (body: unknown, status = 200) =>
 
 export function createApi(cfg: ApiConfig): (req: Request) => Promise<Response> {
   const now = cfg.now ?? (() => Math.floor(Date.now() / 1000));
-  const allowed = new Set(Object.values(cfg.tokens));
+  const allowed = new Set(Object.values(cfg.tokens).map((t) => getAddress(t))); // config casing must not matter
 
   return async (req) => {
     const url = new URL(req.url);
@@ -62,7 +62,8 @@ export function createApi(cfg: ApiConfig): (req: Request) => Promise<Response> {
       const m = url.pathname.match(/^\/intents\/([0-9a-f]{32})$/);
       if (req.method === "GET" && m) {
         const rows = await cfg.db.query<Record<string, unknown>>(
-          `SELECT i.status, i.deposit_id::text AS "depositId", i.amount_out::text AS "amountOut", s.tx_hash AS "payoutTx"
+          `SELECT i.status, i.deposit_id::text AS "depositId", i.amount_out::text AS "amountOut", s.tx_hash AS "payoutTx",
+                  i.blocked_reason AS "blockedReason"
            FROM intents i LEFT JOIN settlements s ON s.id = i.settlement_id AND s.status = 'confirmed' WHERE i.id = $1`,
           [m[1]],
         );

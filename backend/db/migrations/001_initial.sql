@@ -18,7 +18,8 @@ CREATE TABLE intents (
   depositor        TEXT NOT NULL,                   -- deposits are matched on (depositor, deadline_hash)
   status           TEXT NOT NULL DEFAULT 'awaiting_deposit' CHECK (status IN (
                      'awaiting_deposit', 'deposited', 'settling', 'paid',
-                     'refund_requested', 'refunded', 'challenged', 'expired')),
+                     'refund_requested', 'refunded', 'challenged', 'expired', 'blocked')),
+  blocked_reason   TEXT,                            -- why the output token refuses this recipient
   deposit_id       BIGINT UNIQUE,
   deposited_amount NUMERIC,
   settlement_id    BIGINT,
