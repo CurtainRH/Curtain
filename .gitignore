@@ -56,3 +56,7 @@ backend/contracts/broadcast/*/31337/
 .sync-public/
 backend/contracts/deployments/31337.json
 backend/contracts/deployments/fork-*.json
+
+# Codex handoff docs (local only)
+docs/FRONTEND-INTEGRATION.md
+docs/FRONTEND-INTEGRATION-VERIFICATION.md
