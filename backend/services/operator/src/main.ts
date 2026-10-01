@@ -8,7 +8,8 @@
  *   UNISWAP_QUOTER_ADDR    QuoterV2 (required for uniswap-v3); every fee tier is quoted, the best is used
  *   SLIPPAGE_BPS           default 50
  *   KEEPER_FEE_BPS         default 5
- *   OPERATOR_PORT          default 3100
+ *   PORT / OPERATOR_PORT   listen port (Render sets PORT), default 3100
+ *   MIN_OPERATOR_BALANCE_WEI  /status warns below this gas balance, default 0.005 ETH
  *   TICK_MS                default 5000
  *   START_BLOCK            first block to index (default: current head on first run)
  */
@@ -49,8 +50,11 @@ const operator = new Operator({
 });
 
 const server = Bun.serve({
-  port: Number(env("OPERATOR_PORT", "3100")),
-  fetch: createApi({ db, operator, vault, tokens: JSON.parse(env("TOKENS")), keeperFeeBps }),
+  port: Number(process.env["PORT"] ?? env("OPERATOR_PORT", "3100")),
+  fetch: createApi({
+    db, operator, vault, tokens: JSON.parse(env("TOKENS")), keeperFeeBps,
+    minBalanceWei: BigInt(env("MIN_OPERATOR_BALANCE_WEI", "5000000000000000")),
+  }),
 });
 console.log(`@curtain/operator listening on :${server.port}`);
 
@@ -63,6 +67,7 @@ for (;;) {
     await operator.processDue(now);
     await operator.submitSettlements(now);
     await operator.syncChain();
+    operator.markTick();
   } catch (e) {
     console.error("operator tick failed:", e);
   }

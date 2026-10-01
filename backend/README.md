@@ -48,11 +48,16 @@ cd contracts && forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545
 
 ## Running
 
+Production runs on Render: see [docs/DEPLOY_RENDER.md](../docs/DEPLOY_RENDER.md) and `render.yaml` at the repo root. To run locally:
+
 ```bash
 docker compose up -d                                  # Postgres
 cd services/operator && bun run start                 # needs .env (see .env.example)
 cd services/keeper && bun run start                   # optional: anyone can run keepers
 ```
+
+- **Monitoring:** `GET /status` on the operator returns 503 with a list of problems when it needs attention. Point an uptime monitor at it.
+- **Mainnet-fork test:** `services/operator/test/fork.e2e.test.ts` runs the production deploy and real Uniswap swaps on a fork of Robinhood Chain. It needs an archive RPC: `FORK_RPC=<archive url> bun test test/fork.e2e.test.ts`.
 
 ## Status
 
@@ -64,7 +69,7 @@ cd services/keeper && bun run start                   # optional: anyone can run
 | Operator | Built; e2e on anvil covers settlement, keeper landing, expiry and re-settle, challenge, refund, delay, slippage, rescans |
 | Keeper | Built, e2e |
 | SDK | Built, e2e (swap, refund, staking) |
-| Deploy | `Deploy.s.sol` checks all addresses on 4663; not deployed yet |
+| Deploy | `Deploy.s.sol` checks all addresses on 4663; Render Blueprint in `render.yaml`; not deployed yet |
 | $CRTN | Not launched; staking waits for `setTokens` |
 | Lending (Morpho) | After launch |
 

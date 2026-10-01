@@ -17,7 +17,8 @@ const chain = defineChain({
 });
 const minFee = Object.fromEntries(Object.entries(JSON.parse(process.env["KEEPER_MIN_FEE"] ?? "{}") as Record<string, string>).map(([k, v]) => [k, BigInt(v)]));
 const keeper = new Keeper({
-  operatorApi: env("OPERATOR_API"),
+  // Render's fromService gives host:port without a scheme.
+  operatorApi: /^https?:\/\//.test(env("OPERATOR_API")) ? env("OPERATOR_API") : `http://${env("OPERATOR_API")}`,
   vault: env("VAULT_ADDR") as Address,
   publicClient: createPublicClient({ chain, transport: http() }),
   walletClient: createWalletClient({ account: privateKeyToAccount(env("KEEPER_PRIVATE_KEY") as Hex), chain, transport: http() }),

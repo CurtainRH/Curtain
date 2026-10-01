@@ -58,7 +58,8 @@ export interface OperatorConfig {
   /** First block to index if there is no cursor yet. */
   startBlock?: bigint;
   /** Blocks re-read on every sync, in case the RPC's log index lagged its block number or a
-   * short reorg happened (default 10). Every handler is idempotent. */
+   * short reorg happened (default 200: Robinhood Chain makes several blocks a second, so a
+   * small window would be only a few seconds). Every handler is idempotent. */
   rescanBlocks?: bigint;
 }
 
@@ -125,7 +126,7 @@ export class Operator {
     const { db, publicClient, vault } = this.cfg;
     const cur = await db.query<{ block: string }>("SELECT block FROM chain_cursor WHERE id = 1");
     const start = this.cfg.startBlock ?? 0n;
-    const rescan = this.cfg.rescanBlocks ?? 10n;
+    const rescan = this.cfg.rescanBlocks ?? 200n;
     const next = cur[0] ? BigInt(cur[0].block) + 1n : start;
     const from = next - rescan > start ? next - rescan : start;
     const head = await publicClient.getBlockNumber();
@@ -473,6 +474,56 @@ export class Operator {
       }
     }
     return sent;
+  }
+
+  // ---------------------------------------------------------------- monitoring
+
+  private lastTickAt = 0;
+
+  /** Call after each completed operator tick (main loop). */
+  markTick(): void {
+    this.lastTickAt = Date.now();
+  }
+
+  /**
+   * What an uptime monitor should watch. `ok` is false when users could be hurt or soon will be:
+   * - the loop stopped ticking (deposits won't be settled)
+   * - the operator can't afford gas for challenges and its own keeper
+   * - a deposit is close to its deadline without a landed settlement (its owner will refund)
+   * - the chain watcher is far behind the head
+   */
+  async status(nowSec: number, opts: { minBalanceWei?: bigint; maxTickAgeMs?: number; maxLagBlocks?: bigint } = {}) {
+    const { db, publicClient } = this.cfg;
+    const minBalance = opts.minBalanceWei ?? 5_000_000_000_000_000n; // 0.005 ETH
+    const maxTickAge = opts.maxTickAgeMs ?? 60_000;
+    const maxLag = opts.maxLagBlocks ?? 200n;
+
+    const [balance, head, cur, atRisk, pending] = await Promise.all([
+      publicClient.getBalance({ address: this.account.address }),
+      publicClient.getBlockNumber(),
+      db.query<{ block: string }>("SELECT block FROM chain_cursor WHERE id = 1"),
+      db.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM intents WHERE status IN ('deposited', 'settling') AND deadline - $1 < 180",
+        [nowSec],
+      ),
+      db.query<{ n: string }>("SELECT count(*)::text AS n FROM settlements WHERE status = 'signed'"),
+    ]);
+    const lagBlocks = cur[0] ? head - BigInt(cur[0].block) : head;
+    const tickAgeMs = this.lastTickAt ? Date.now() - this.lastTickAt : null;
+    const problems: string[] = [];
+    if (tickAgeMs === null || tickAgeMs > maxTickAge) problems.push("operator loop is not ticking");
+    if (balance < minBalance) problems.push("operator gas balance is low");
+    if (Number(atRisk[0]!.n) > 0) problems.push(`${atRisk[0]!.n} deposit(s) within 3 minutes of their deadline without a landed settlement`);
+    if (lagBlocks > maxLag) problems.push(`chain watcher is ${lagBlocks} blocks behind`);
+    return {
+      ok: problems.length === 0,
+      problems,
+      operator: this.account.address,
+      operatorBalanceWei: balance.toString(),
+      lagBlocks: lagBlocks.toString(),
+      lastTickAgeMs: tickAgeMs,
+      pendingSettlements: Number(pending[0]!.n),
+    };
   }
 
   // ---------------------------------------------------------------- helpers

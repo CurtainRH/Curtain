@@ -18,7 +18,7 @@ import {MockDexRouter} from "../test/mocks/MockDexRouter.sol";
 /// On local chains: Anvil's public dev key, mock tokens and a mock DEX router.
 ///
 /// Staking ships with no tokens set; the admin calls `setTokens` once $CRTN launches.
-/// Writes deployments/<chainid>.json.
+/// Writes deployments/<chainid>.json (or $DEPLOYMENT_FILE).
 contract DeployScript is Script {
     uint256 internal constant RHC_CHAIN_ID = 4663;
     // Anvil account #0 — public, well-known, for local chains only (never used on 4663).
@@ -86,12 +86,14 @@ contract DeployScript is Script {
             tokensJson = vm.serializeAddress(t, IERC20Metadata(tokens[i]).symbol(), tokens[i]);
         }
         string memory json = vm.serializeString(k, "tokens", tokensJson);
-        vm.writeJson(json, string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), ".json"));
+        string memory defaultFile = string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), ".json");
+        vm.writeJson(json, vm.envOr("DEPLOYMENT_FILE", defaultFile)); // override lets fork tests avoid the real file
 
         console.log("CurtainVault:  ", address(vault));
         console.log("CurtainStaking:", address(staking));
         console.log("DEX router:    ", router);
         console.log("Admin:         ", admin);
         console.log("Operator:      ", operator);
+        if (admin != deployer) console.log("Next: the admin must call acceptOwnership() on the vault to finish the transfer.");
     }
 }

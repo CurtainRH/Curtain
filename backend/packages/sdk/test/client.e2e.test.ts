@@ -73,7 +73,11 @@ describe("CurtainClient (e2e)", () => {
     chainNow = await d.now();
     const s = await client.swap({ tokenIn: tokens["USDG"]!, amountIn: parseEther("500"), tokenOut: tokens["SPY"]!, recipient: fresh, minOut: parseEther("0.99"), delaySeconds: 0 });
     expect(s.ticket.depositId).toBe("1");
-    for (let i = 0; i < 10 && (await client.status(s.intentId)).status !== "paid"; i++) await operatorTick();
+    // Poll like the app would: under load the node can serve an event a moment late.
+    for (let i = 0; i < 50 && (await client.status(s.intentId)).status !== "paid"; i++) {
+      await operatorTick();
+      await Bun.sleep(200);
+    }
     expect((await client.status(s.intentId)).status).toBe("paid");
     expect(await bal(tokens["SPY"]!, fresh)).toBeGreaterThanOrEqual(parseEther("0.99"));
   });

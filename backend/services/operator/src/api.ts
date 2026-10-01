@@ -1,7 +1,8 @@
 /**
  * Operator HTTP API.
  *
- *   GET  /health
+ *   GET  /health                  liveness (always 200 while the process serves)
+ *   GET  /status                  200 when healthy, 503 + problems when it needs attention
  *   GET  /config                  vault, tokens, fees, limits
  *   POST /intents                 { tokenIn, amountIn, tokenOut, recipient, depositor, minOut, delaySeconds }
  *                                 -> { id, deadline, salt, deadlineHash, vault }
@@ -20,6 +21,8 @@ export interface ApiConfig {
   vault: Address;
   tokens: Record<string, Address>; // symbol -> address
   keeperFeeBps: number;
+  /** /status reports a problem below this operator gas balance (default 0.005 ETH). */
+  minBalanceWei?: bigint;
   now?: () => number; // unix seconds
 }
 
@@ -40,6 +43,12 @@ export function createApi(cfg: ApiConfig): (req: Request) => Promise<Response> {
         return new Response(null, { headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type" } });
       }
       if (req.method === "GET" && url.pathname === "/health") return json({ status: "ok" });
+
+      // For an uptime monitor: 503 with the list of problems when something needs attention.
+      if (req.method === "GET" && url.pathname === "/status") {
+        const st = await cfg.operator.status(now(), { minBalanceWei: cfg.minBalanceWei });
+        return json(st, st.ok ? 200 : 503);
+      }
 
       if (req.method === "GET" && url.pathname === "/config") {
         return json({ vault: cfg.vault, tokens: cfg.tokens, keeperFeeBps: cfg.keeperFeeBps, maxDelaySeconds: MAX_DELAY_SECONDS });

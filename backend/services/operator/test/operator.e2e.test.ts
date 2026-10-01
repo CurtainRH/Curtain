@@ -57,15 +57,27 @@ async function swap(amountIn: bigint, minOut: bigint, delaySeconds = 0) {
   // Poll like a real client: the node's log index can trail its block number by a moment;
   // the operator's rescan picks the deposit up on the next sync.
   let intent: any;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 100; i++) {
     await op.syncChain();
     intent = (await call(`/intents/${body.id}`)).body;
     if (intent.depositId) break;
     await Bun.sleep(100);
   }
-  expect(intent.depositId).toBeDefined();
+  expect(intent.depositId).toBeTruthy();
   return { id: body.id as string, deadline: BigInt(body.deadline), salt: body.salt as Hex, depositId: BigInt(intent.depositId), block: r.blockNumber };
 }
+
+/** Syncs until `done()` holds, like a client polling: under load the node can serve an event a
+ * moment after its receipt. */
+async function syncUntil(done: () => Promise<boolean>) {
+  for (let i = 0; i < 100; i++) {
+    await op.syncChain();
+    if (await done()) return;
+    await Bun.sleep(100);
+  }
+  throw new Error("condition never reached");
+}
+const statusIs = (id: string, want: string) => async () => (await call(`/intents/${id}`)).body.status === want;
 
 async function balance(token: Address, who: Address) {
   return d.publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: "balanceOf", args: [who] });
@@ -118,7 +130,7 @@ describe("private swap lifecycle (e2e)", () => {
       chain: d.chain, account: keeper.account!, address: d.deployment.vault, abi: VAULT_ABI, functionName: "settle",
       args: settleArgs(pending[0]),
     }));
-    await op.syncChain();
+    await syncUntil(statusIs(s.id, "paid"));
 
     const gross = (parseEther("5") * 9950n) / 10000n; // 1000 USDG at 200/NVDA, minus 0.5% slippage tolerance
     const fee = (gross * 20n) / 10000n;
@@ -137,14 +149,18 @@ describe("private swap lifecycle (e2e)", () => {
       chain: d.chain, account: d.wallets.user.account!, address: d.deployment.vault, abi: VAULT_ABI,
       functionName: "requestRefund", args: [s.depositId, s.deadline, s.salt],
     }));
-    const { challenged } = await op.syncChain();
+    // Collect what every sync challenged (syncUntil would drop its own sync's result).
+    const challenged: bigint[] = [];
+    for (let i = 0; i < 100 && challenged.length === 0; i++) {
+      challenged.push(...(await op.syncChain()).challenged);
+      if (challenged.length === 0) await Bun.sleep(100);
+    }
     expect(challenged).toEqual([s.depositId]);
     await warp(11 * 60);
     await expect(d.wallets.user.writeContract({
       chain: d.chain, account: d.wallets.user.account!, address: d.deployment.vault, abi: VAULT_ABI, functionName: "finalizeRefund", args: [s.depositId],
     }).then(wait)).rejects.toThrow();
-    await op.syncChain();
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("challenged");
+    await syncUntil(statusIs(s.id, "challenged"));
   });
 
   it("escape hatch: an unpaid deposit is refunded after deadline + 3 min + 10 min challenge window", async () => {
@@ -158,8 +174,7 @@ describe("private swap lifecycle (e2e)", () => {
       chain: d.chain, account: d.wallets.user.account!, address: d.deployment.vault, abi: VAULT_ABI,
       functionName: "requestRefund", args: [s.depositId, s.deadline, s.salt],
     }));
-    await op.syncChain();
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("refund_requested");
+    await syncUntil(statusIs(s.id, "refund_requested"));
     // Once a refund is requested the operator must not settle it.
     await op.processDue(await d.now());
     expect((await call(`/intents/${s.id}`)).body.status).toBe("refund_requested");
@@ -168,9 +183,8 @@ describe("private swap lifecycle (e2e)", () => {
     await wait(await d.wallets.user.writeContract({
       chain: d.chain, account: d.wallets.user.account!, address: d.deployment.vault, abi: VAULT_ABI, functionName: "finalizeRefund", args: [s.depositId],
     }));
-    await op.syncChain();
+    await syncUntil(statusIs(s.id, "refunded"));
     expect((await balance(usdg, userAddr)) - before).toBe(parseEther("500"));
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("refunded");
   });
 
   it("delayed swap waits for its random payout time; slippage failures retry instead of paying badly", async () => {
@@ -196,8 +210,7 @@ describe("private swap lifecycle (e2e)", () => {
     const before = await balance(nvda, recipient);
     await op.processDue(await d.now());
     await op.submitSettlements(await d.now());
-    await op.syncChain();
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("paid");
+    await syncUntil(statusIs(s.id, "paid"));
     expect((await balance(nvda, recipient)) - before).toBeGreaterThanOrEqual(parseEther("0.9"));
   });
 
@@ -213,8 +226,7 @@ describe("private swap lifecycle (e2e)", () => {
     const [row] = await db.query<{ status: string }>("SELECT status FROM settlements WHERE id = $1", [first]);
     expect(row!.status).toBe("expired");
     await op.submitSettlements(await d.now());
-    await op.syncChain();
-    expect((await call(`/intents/${s.id}`)).body.status).toBe("paid");
+    await syncUntil(statusIs(s.id, "paid"));
   });
 
   it("re-reading old blocks is harmless: statuses unchanged, no duplicate challenges", async () => {
@@ -233,6 +245,16 @@ describe("private swap lifecycle (e2e)", () => {
       body: JSON.stringify({ tokenIn: usdg, amountIn: "1", tokenOut: nvda, recipient, depositor: d.wallets.user.account!.address, minOut: "1", delaySeconds: 0 }),
     }));
     expect(res.status).toBe(201);
+  });
+
+  it("/status flags a stalled loop and recovers once it ticks", async () => {
+    const before = await call("/status");
+    expect(before.status).toBe(503);
+    expect(before.body.problems).toContain("operator loop is not ticking");
+    op.markTick();
+    const after = await call("/status");
+    expect(after.body.problems).not.toContain("operator loop is not ticking");
+    expect(BigInt(after.body.operatorBalanceWei)).toBeGreaterThan(0n);
   });
 
   it("rejects bad intents", async () => {
