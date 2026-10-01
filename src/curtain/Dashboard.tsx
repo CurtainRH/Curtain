@@ -1,33 +1,1057 @@
-import { useState,useEffect,useRef,type ReactNode } from 'react';
-import { LayoutDashboard,Shield,Layers3,ScanLine,Fingerprint,Activity,ShieldCheck,ArrowUpRight,ArrowRight,ArrowDown,Plus,X,Wallet,LockKeyhole,ChevronRight,Info,Check,Download,Trash2,FileText,Copy,Eye,EyeOff,RefreshCw,ExternalLink,Search,Coins,CheckCircle2,BookOpen,Menu } from 'lucide-react';
-import {useNav,Logo,RouteLink,Socials} from './App';
-import {useWorkspaceTools} from './useWorkspaceTools';
-import {quote,parseUnits,formatUnits,isHex,readDrafts,downloadFile,type Draft,type Asset} from './domain';
-const nav=[{id:'overview',path:'/app',name:'Overview',icon:LayoutDashboard},{id:'shield',path:'/app/shield',name:'Shield & unshield',icon:Shield},{id:'recipes',path:'/app/recipes',name:'Private DeFi',icon:Layers3},{id:'receive',path:'/app/receive',name:'Stealth receive',icon:ScanLine},{id:'disclosure',path:'/app/disclosure',name:'Disclosure',icon:Fingerprint},{id:'proofs',path:'/app/proofs',name:'Proofs & status',icon:ShieldCheck},{id:'activity',path:'/app/activity',name:'Activity',icon:Activity}];
-const assetName:Record<Asset,string>={USDG:'Global Dollar',NVDA:'NVIDIA Stock Token'};
-const TOKEN_LOGOS:Record<Asset,string>={USDG:'/tokens/usdg.png',NVDA:'/tokens/nvda.svg'};function Token({asset}:{asset:Asset}){return <span className={`token-icon ${asset.toLowerCase()}`}><img src={TOKEN_LOGOS[asset]} alt={asset} width={34} height={34} loading="lazy"/></span>}
-function Note({children}:{children:ReactNode}){return <div className="notice"><Info size={16}/><p>{children}</p></div>}
-export default function Dashboard({path}:{path:string}){const {wallet,connect,navigate}=useNav();const requestedSection=path.split('/')[2]||'overview';const section=nav.some(n=>n.id===requestedSection)?requestedSection:'overview';const current=(nav.find(n=>n.id===section)||nav[0])!;const [drafts,setDrafts]=useState<Draft[]>(readDrafts);const [selected,setSelected]=useState<Draft|null>(null);const [toast,setToast]=useState('');const [sideOpen,setSideOpen]=useState(false);const [conceal,setConceal]=useState(false);const [filter,setFilter]=useState('');const [period,setPeriod]=useState('1M');const [mode,setMode]=useState<'shield'|'unshield'>('shield');const [asset,setAsset]=useState<Asset>('USDG');const [amount,setAmount]=useState('');const [originNote,setOriginNote]=useState('');const [formError,setFormError]=useState('');const [recipient,setRecipient]=useState('');const [recipe,setRecipe]=useState('buy');const [slippage,setSlippage]=useState('0.5');const [scope,setScope]=useState('Account');const [viewer,setViewer]=useState('');const [label,setLabel]=useState('');const [expiry,setExpiry]=useState('7');const [scopeNote,setScopeNote]=useState('');const [prover,setProver]=useState(()=>localStorage.getItem('curtain-prover')||'local');const [refreshAt,setRefreshAt]=useState('');const detail=useRef<HTMLDialogElement>(null);
- useWorkspaceTools(drafts,section,navigate);
- useEffect(()=>{setFormError('');setSideOpen(false);setFilter('');setAmount('')},[section]);
- useEffect(()=>{try{localStorage.setItem('curtain-plans-v1',JSON.stringify(drafts))}catch{setToast('Device storage is unavailable. This session is still available.')}},[drafts]);
- useEffect(()=>{if(!toast)return;const timer=setTimeout(()=>setToast(''),4000);return()=>clearTimeout(timer)},[toast]);
- useEffect(()=>{if(selected){const node=detail.current;const before=document.body.style.overflow;document.body.style.overflow='hidden';node?.showModal();return()=>{node?.close();document.body.style.overflow=before}}return undefined},[selected]);
- function prepare(kind:string,details:Record<string,string>,withAmount=true){try{const q=withAmount?(details['inputUnit']?.startsWith('Vault shares')?{amount:formatUnits(parseUnits(amount)),fee:'Requires live NAV',net:'Requires live NAV'}:quote(amount)):{amount:'0',fee:'0',net:'0'};const d:Draft={id:crypto.randomUUID(),kind,asset, ...q,createdAt:new Date().toISOString(),details:{...details,provingMode:prover==='local'?'Local':'Assisted'},status:'Prepared'};setDrafts(prev=>[d,...prev].slice(0,100));setSelected(d);setFormError('')}catch(e){setFormError((e as Error).message)}}
- const shortWallet=wallet?`${wallet.slice(0,6)}…${wallet.slice(-4)}`:'';
- const visibleDrafts=drafts.filter(d=>(d.kind+' '+d.asset+' '+d.id).toLowerCase().includes(filter.toLowerCase()));
- const safeQuote=(()=>{try{return quote(amount)}catch{return null}})();
- const recipes=[{id:'buy',name:'Buy & shield',protocol:'Uniswap',desc:'Swap USDG for NVDA and receive the output as a shielded note.',steps:['USDG','Uniswap swap','Shielded NVDA'],fee:'0.20% protocol fee; broadcaster and swap costs separate'},{id:'swap',name:'Private swap',protocol:'Uniswap',desc:'Compose a swap between supported assets, with shielded output.',steps:['Shielded input','Uniswap swap','Shielded output'],fee:'0.20% exit fee; reshield fee waived'},{id:'deposit',name:'USDG vault deposit',protocol:'Morpho',desc:'Move USDG into a supported vault. Receive vault-share notes while the vault NAV accrues.',steps:['Shielded USDG','Morpho deposit','Vault-share note'],fee:'0.20% exit fee; reshield fee waived'},{id:'withdraw',name:'USDG vault withdrawal',protocol:'Morpho',desc:'Prepare the redemption of a supported vault-share position back to shielded USDG.',steps:['Vault-share note','Morpho withdraw','Shielded USDG'],fee:'0.20% exit fee; reshield fee waived'}];
- const chosen=recipes.find(r=>r.id===recipe)!;
- const copy=async(v:string)=>{try{await navigator.clipboard.writeText(v);setToast('Copied to clipboard.')}catch{setToast('Copy is unavailable in this browser.')}};
- function DraftRows({items}:{items:Draft[]}){return <div className="draft-rows">{items.map(d=><button key={d.id} onClick={()=>setSelected(d)} className="draft-row"><span className="draft-icon"><FileText size={17}/></span><span><strong>{d.kind}</strong><small>{new Date(d.createdAt).toLocaleDateString(undefined,{month:'short',day:'numeric'})} · {d.asset}</small></span><span className="draft-amount">{d.amount!=='0'?`${d.amount} ${d.details['inputUnit']?.startsWith('Vault shares')?'shares':d.asset}`:'Scoped request'}<small>Prepared</small></span><ChevronRight size={16}/></button>)}</div>}
- return <main id="main" className="app-layout"><aside className={`sidebar ${sideOpen?'expanded':''}`}><div className="sidebar-caption"><span className="eyebrow">YOUR PRIVATE BOX</span><span className="box-no">Nº 01</span></div><nav aria-label="Application navigation">{nav.map(n=><RouteLink to={n.path} key={n.id} className={`side-link ${current.id===n.id?'selected':''}`} onAfter={()=>setSideOpen(false)}><n.icon size={18}/><span>{n.name}</span>{current.id===n.id&&<span className="nav-diamond">◆</span>}</RouteLink>)}</nav><div className="sidebar-bottom"><div className="side-motto"><Logo compact/><p>The position is yours.<br/><em>So is the privacy.</em></p></div><Socials/><div className="side-legal"><RouteLink to="/legal/terms">Terms</RouteLink><RouteLink to="/legal/privacy">Privacy</RouteLink><RouteLink to="/legal/risk">Risks</RouteLink></div><RouteLink to="/" className="return-link">Back to the overture <ArrowUpRight size={13}/></RouteLink></div></aside><div className="app-content"><div className="app-topline"><button className="mobile-sidebar" onClick={()=>setSideOpen(v=>!v)} aria-expanded={sideOpen} aria-label="Toggle application navigation"><Menu size={18}/></button><span className="breadcrumbs">PRIVATE BOX <ChevronRight size={12}/> <span>{current.name}</span></span><div><span className="network-label">Robinhood Chain <span>4663</span></span><button className="wallet-button" onClick={connect}><Wallet size={15}/>{wallet?shortWallet:'Connect wallet'}<ChevronRight size={13}/></button></div></div><div className="dashboard-body"><div className="dashboard-heading"><div><p className="eyebrow">{section==='overview'?'THE HOUSE IS YOURS':'CURTAIN / PRIVATE WORKSPACE'}</p><h1 tabIndex={-1}>{section==='overview'?<>Welcome to your <em>private box.</em></>:current.name}</h1><p>{section==='overview'?'Your assets. Your actions. Your choice of audience.':section==='shield'?'A considered entrance. A deliberate exit.':section==='recipes'?'Compose a complete act, from shield to shield.':section==='receive'?'A new address for each arrival.':section==='disclosure'?'Invite a view. Keep control of the scope.':section==='proofs'?'The mechanics behind your privacy, in clear view.':'Every prepared action, in one place.'}</p></div>{section==='overview'?<button className="button gold" onClick={()=>navigate('/app/shield')}><Plus size={16}/>Shield assets</button>:<span className="chapter-mark">{['overview','shield','recipes','receive','disclosure','proofs','activity'].indexOf(current.id)+1} / VII</span>}</div>
- {section==='overview'&&<><div className="dashboard-stats"><div><span>Shielded value <button aria-label={conceal?'Show balances':'Conceal balances'} onClick={()=>setConceal(v=>!v)}>{conceal?<EyeOff size={14}/>:<Eye size={14}/>}</button></span><strong>{conceal?'••••••':'$ —'}</strong><small>{wallet?'Awaiting network data':'Connect to view your assets'}</small></div><div><span>Stock Token positions <Layers3 size={16}/></span><strong>{conceal?'••':'—'}<em>assets</em></strong><small>Private by design</small></div><div><span>Prepared actions <FileText size={16}/></span><strong>{drafts.length.toString().padStart(2,'0')}<em>requests</em></strong><small>Saved on this device</small></div><div><span>Disclosure scope <Fingerprint size={16}/></span><strong>You<em>decide</em></strong><small>Account or individual note</small></div></div><div className="overview-grid"><section className="panel portfolio-panel"><div className="panel-heading"><h2>Your private portfolio</h2><div className="period-switch" aria-label="Portfolio timeframe">{['1W','1M','3M','ALL'].map(p=><button aria-pressed={period===p} key={p} onClick={()=>setPeriod(p)}>{p}</button>)}</div></div><div className="empty-chart"><div className="chart-lines"><span/><span/><span/><span/></div><div className="chart-empty"><div className="small-seal"><Logo compact/></div><h3>A clear view. Just for you.</h3><p>{period==='ALL'?'Your complete':period==='1W'?'Seven days of':period==='3M'?'Three months of':'One month of'} portfolio history will appear when a wallet and network data are connected.</p><button className="underlined-link" onClick={connect}>{wallet?'View wallet connection':'Connect your wallet'}<ArrowUpRight size={15}/></button></div><div className="chart-axis"><span>{period==='ALL'?'FIRST ACT':period==='1W'?'7 DAYS AGO':period==='3M'?'90 DAYS AGO':'30 DAYS AGO'}</span><span>TODAY</span></div></div><div className="portfolio-foot"><LockKeyhole size={13}/><span>Balances are visible only after your wallet is connected.</span></div></section><section className="panel next-act"><span className="eyebrow">MAKE YOUR NEXT MOVE</span><h2>Privacy.<br/><em>In three acts.</em></h2>{([['01','Shield your assets','/app/shield'],['02','Compose private DeFi','/app/recipes'],['03','Choose your audience','/app/disclosure']] as [string,string,string][]).map(([n,title,to])=><RouteLink key={n} to={to}><span>{n}</span>{title}<ArrowUpRight size={17}/></RouteLink>)}<span className="next-act-note">Your portfolio is the performance.<br/>You decide who gets a seat.</span></section></div><div className="overview-lower"><section className="panel"><div className="panel-heading"><h2>Asset repertoire</h2><span className="pill">Protocol assets</span></div><div className="asset-table"><div className="table-head"><span>ASSET</span><span>BALANCE</span><span>POSITION</span></div>{(['USDG','NVDA'] as Asset[]).map(a=><div className="asset-row" key={a}><div><Token asset={a}/><span><strong>{a}</strong><small>{assetName[a]}</small></span></div><span>{conceal?'•••':'—'}</span><button onClick={()=>{setAsset(a);navigate('/app/shield')}}>Shield <ArrowUpRight size={13}/></button></div>)}</div></section><section className="panel"><div className="panel-heading"><h2>Recent activity</h2><RouteLink to="/app/activity" className="text-button">View all <ArrowUpRight size={14}/></RouteLink></div>{drafts.length?<DraftRows items={drafts.slice(0,3)}/>:<div className="empty-compact"><FileText size={24}/><h3>A fresh page.</h3><p>Prepared requests will appear here.<br/>No transactions have been submitted.</p></div>}</section></div></>}
- {section==='shield'&&<div className="workspace-grid"><section className="panel form-panel"><div className="form-tabs" role="tablist" aria-label="Asset action"><button role="tab" aria-selected={mode==='shield'} onClick={()=>{setMode('shield');setFormError('')}}>Shield assets</button><button role="tab" aria-selected={mode==='unshield'} onClick={()=>{setMode('unshield');setFormError('')}}>Unshield to origin</button></div><form onSubmit={e=>{e.preventDefault();if(mode==='unshield'&&!isHex(originNote,32)){setFormError('Enter a 32-byte note commitment beginning with 0x.');return}prepare(mode==='shield'?'Shield assets':'Unshield to origin',{network:'Robinhood Chain (4663)',...(mode==='unshield'?{noteCommitment:originNote,destination:'Original depositing wallet'}:{standby:'15 minutes standard; 60 minutes when providers are degraded'}),wallet:wallet||'Not connected'})}}><label className="field-label" htmlFor="asset">Asset</label><div className="asset-input"><Token asset={asset}/><select id="asset" value={asset} onChange={e=>setAsset(e.target.value as Asset)}><option value="USDG">USDG · Global Dollar</option><option value="NVDA">NVDA · Stock Token</option></select></div><label className="field-label" htmlFor="amount">Amount</label><div className="amount-input"><input id="amount" type="text" inputMode="decimal" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} required autoComplete="off"/><span>{asset}</span></div><span className="field-help">Raw token units · Balance {wallet?'awaiting network data':'requires wallet connection'}</span>{mode==='unshield'&&<><label className="field-label" htmlFor="note">Note commitment</label><input id="note" value={originNote} onChange={e=>setOriginNote(e.target.value)} placeholder="0x…" autoComplete="off" required/><p className="field-help">The destination is fixed to the original depositing wallet.</p></>}<div className="fee-breakdown"><div><span>Protocol fee</span><span>0.20% <small>{safeQuote?`(${safeQuote.fee} ${asset})`:''}</small></span></div><div><span>Amount after protocol fee</span><strong>{safeQuote?.net||'—'} {asset}</strong></div><div><span>Network & broadcaster costs</span><span>Quoted before execution</span></div></div><Note>{mode==='shield'?'A new note enters proof screening. A cleared proof may release it sooner than the standard standby.':'The origin-only exit is designed to remain available during standby. A prepared request does not execute an exit.'}</Note>{formError&&<p role="alert" className="form-error">{formError}</p>}<button className="button gold full" type="submit">Review {mode==='shield'?'shield':'exit'} request <ArrowRight size={17}/></button><p className="local-caption">Prepare and review locally. No assets move.</p></form></section><aside className="workspace-aside"><div className="aside-art"><span className="eyebrow">THE ENTRANCE IS YOURS</span><Logo compact/><h2>{mode==='shield'?<>Step inside.<br/><em>Stay in control.</em></>:<>Leave by<br/><em>your own door.</em></>}</h2></div><div className="mini-guide"><h3>How the act unfolds</h3>{(mode==='shield'?['Choose your supported asset','Review fees and approve in your wallet','Screen the note’s provenance','Manage your shielded position']:['Select the original note','Prove ownership of the note','Review the origin-only destination','Authorize the exit in your wallet']).map((s,i)=><p key={s}><span>0{i+1}</span>{s}</p>)}</div></aside></div>}
- {section==='recipes'&&<><div className="recipe-grid">{recipes.map(r=><button className={`recipe-card ${recipe===r.id?'active':''}`} onClick={()=>{setRecipe(r.id);setFormError('');setAmount('');setAsset('USDG')}} key={r.id}><span className="eyebrow">{r.protocol}<ArrowUpRight size={16}/></span><h2>{r.name}</h2><p>{r.desc}</p><span className="recipe-select">{recipe===r.id?<><Check size={13}/>Selected</>:<>Compose this recipe <ArrowRight size={13}/></>}</span></button>)}</div><div className="workspace-grid recipes-workspace"><section className="panel form-panel"><div className="panel-heading"><h2>Compose: {chosen.name}</h2><span className="pill">Atomic sequence</span></div><form onSubmit={e=>{e.preventDefault();const n=Number(slippage);if(!Number.isFinite(n)||n<0.1||n>5){setFormError('Choose a slippage tolerance between 0.1% and 5%.');return}prepare(chosen.name,{protocol:chosen.protocol,slippage:`${slippage}%`,sequence:chosen.steps.join(' → '),quoteStatus:'Live quote required', ...(recipe==='withdraw'?{inputUnit:'Vault shares; exact redemption amount requires live NAV'}:{inputUnit:'Raw token units'}),wallet:wallet||'Not connected'})}}><div className="recipe-sequence">{chosen.steps.map((s,i)=><span key={s}>{i>0&&<ArrowRight size={13}/>}<b>{s}</b></span>)}</div><label className="field-label" htmlFor="recipe-amount">{recipe==='withdraw'?'Vault shares':'Input amount (USDG)'}</label><div className="amount-input"><input id="recipe-amount" inputMode="decimal" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} required/><span>{recipe==='withdraw'?'shares':'USDG'}</span></div><label className="field-label" htmlFor="slippage">Slippage tolerance</label><div className="slippage-row"><div className="segmented">{['0.1','0.5','1'].map(v=><button key={v} type="button" aria-pressed={slippage===v} onClick={()=>setSlippage(v)}>{v}%</button>)}</div><input id="slippage" value={slippage} type="number" step="0.1" min="0.1" max="5" onChange={e=>setSlippage(e.target.value)} aria-label="Custom slippage percentage"/><span>%</span></div><div className="fee-breakdown"><div><span>Protocol</span><span>{chosen.protocol}</span></div><div><span>Output quote</span><span>Awaiting live market data</span></div><div><span>Fee policy</span><span>{recipe==='buy'?'0.20% shield fee':'0.20% exit · no reshield fee'}</span></div></div><Note>{recipe==='withdraw'?'Redemption amounts and fees are calculated against the current vault NAV before execution.':chosen.fee+'.'} A live quote and wallet approval are required to execute.</Note>{formError&&<p role="alert" className="form-error">{formError}</p>}<button className="button gold full" type="submit">Review recipe <ArrowRight size={17}/></button></form></section><aside className="workspace-aside"><div className="aside-art"><span className="eyebrow">RELAYADAPT</span><Layers3 size={48} strokeWidth={.8}/><h2>One act.<br/><em>Every movement.</em></h2></div><div className="mini-guide"><h3>All together, or not at all.</h3><p>Unshield the input, execute the selected protocol action, then reshield the output. The specified atomic design reverts the entire sequence if any step fails.</p><p>New output notes retain the cleared origin. Same-transaction reshielding skips a second standby.</p></div></aside></div></>}
- {section==='receive'&&<div className="workspace-grid"><section className="panel form-panel"><div className="panel-heading"><h2>A private arrival</h2><span className="pill">ERC-5564 / 6538</span></div><p className="form-intro">Prepare registration of a stealth meta-address generated by a compatible wallet. Curtain never asks for a private key or recovery phrase.</p><form onSubmit={e=>{e.preventDefault();if(!/^st:eth:0x[0-9a-f]{132}$/i.test(recipient)){setFormError('Enter a valid stealth meta-address: st:eth:0x followed by 132 hexadecimal characters.');return}prepare('Stealth address registration',{metaAddress:recipient,scheme:'secp256k1 · scheme 1',wallet:wallet||'Not connected'},false)}}><label className="field-label" htmlFor="meta">Stealth meta-address</label><textarea id="meta" rows={4} value={recipient} onChange={e=>setRecipient(e.target.value)} placeholder="st:eth:0x…" required spellCheck={false}/><Note>This is a public receiving identifier, not a spend key. Registration and address derivation require the connected Curtain SDK.</Note>{formError&&<p role="alert" className="form-error">{formError}</p>}<button className="button gold full" type="submit">Review registration <ArrowRight size={17}/></button></form><div className="receive-state"><ScanLine size={25}/><div><h3>Receiving address</h3><p>Not generated. Connect the stealth service to derive a valid one-time address.</p></div></div></section><aside className="workspace-aside"><div className="aside-art"><span className="eyebrow">BY INVITATION</span><ScanLine size={50} strokeWidth={.8}/><h2>A different door.<br/><em>Every time.</em></h2></div><div className="mini-guide"><h3>How stealth receive works</h3><p><span>01</span>Register your public meta-address</p><p><span>02</span>The sender derives a one-time address</p><p><span>03</span>Your wallet scans for announcements</p><p><span>04</span>You control the received assets</p></div></aside></div>}
- {section==='disclosure'&&<div className="workspace-grid"><section className="panel form-panel"><div className="panel-heading"><h2>Invite a view</h2><Fingerprint size={20}/></div><form onSubmit={e=>{e.preventDefault();if(!isHex(viewer)||viewer.length<66||viewer.length>266){setFormError('Enter a public encryption key in hexadecimal format (32–132 bytes).');return}if(scope==='Single note'&&!isHex(scopeNote,32)){setFormError('Enter the 32-byte commitment of the selected note.');return}prepare('Disclosure plan',{label:label||'Untitled viewer',scope,viewerPublicKey:viewer,expiresAfter:`${expiry} days`,...(scope==='Single note'?{noteCommitment:scopeNote}:{}),status:'No view key shared'},false)}}><label className="field-label" htmlFor="viewer-label">Viewer label</label><input id="viewer-label" value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. My auditor" maxLength={80}/><label className="field-label" htmlFor="viewer-key">Viewer’s public encryption key</label><textarea id="viewer-key" value={viewer} onChange={e=>setViewer(e.target.value)} placeholder="0x…" rows={3} required spellCheck={false}/><div className="form-two"><div><label className="field-label" htmlFor="scope">Disclosure scope</label><select id="scope" value={scope} onChange={e=>setScope(e.target.value)}><option>Account</option><option>Single note</option></select></div><div><label className="field-label" htmlFor="expiry">Access duration</label><select id="expiry" value={expiry} onChange={e=>setExpiry(e.target.value)}><option value="1">1 day</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></div></div>{scope==='Single note'&&<><label className="field-label" htmlFor="scope-note">Note commitment</label><input id="scope-note" value={scopeNote} onChange={e=>setScopeNote(e.target.value)} placeholder="0x…" required/></>}<Note>Revocation is forward-looking. Information a viewer has already decrypted cannot be recalled. Preparing this plan does not share a viewing key.</Note>{formError&&<p role="alert" className="form-error">{formError}</p>}<button className="button gold full" type="submit">Review disclosure plan <ArrowRight size={17}/></button></form></section><aside className="workspace-aside"><div className="aside-art"><span className="eyebrow">CHOOSE YOUR AUDIENCE</span><Fingerprint size={50} strokeWidth={.8}/><h2>A view.<br/><em>Not the keys.</em></h2></div><section className="panel"><div className="panel-heading"><h2>Your disclosure plans</h2></div>{drafts.filter(d=>d.kind==='Disclosure plan').length?<DraftRows items={drafts.filter(d=>d.kind==='Disclosure plan').slice(0,3)}/>:<div className="empty-compact"><Fingerprint size={22}/><p>No disclosure plans yet.<br/>Create one when you’re ready to share a view.</p></div>}</section></aside></div>}
- {section==='proofs'&&<><div className="proof-banner"><ShieldCheck size={35} strokeWidth={1}/><div><h2>Trust the proof.<br/><em>Keep the position private.</em></h2><p>Protocol specifications are shown below. Live attestations require a connected service.</p></div><button className="button outline" onClick={()=>{setRefreshAt(new Date().toLocaleTimeString());setToast('No network service is configured. Live status remains unavailable.')}}><RefreshCw size={15}/>Check status</button></div><div className="status-grid">{[['Screening providers','Not connected','Blinded provenance screening against pinned provider roots.'],['Solvency attestations','Not available','Hourly proof design: pool balances cover live notes per token.'],['Broadcaster network','Not connected','Bonded broadcasters publish fee schedules and submit encrypted bundles.']].map(([title,state,desc])=><section className="panel status-card" key={title}><span className="eyebrow">PROTOCOL STATUS</span><h2>{title}</h2><span className="status-neutral">{state}</span><p>{desc}</p></section>)}</div><div className="overview-lower"><section className="panel form-panel"><div className="panel-heading"><h2>Proof preferences</h2></div><p className="form-intro">Choose the proving mode to include in your action plans. Proof generation becomes available through the connected prover.</p><div className="prover-options">{([['local','Local proving','Prepare for proof generation on your device.'],['assist','Assisted proving','Prepare for the protocol’s blinded-witness proving service.']] as [string,string,string][]).map(([id,title,desc])=><button key={id} aria-pressed={prover===id} onClick={()=>{setProver(id);localStorage.setItem('curtain-prover',id);setToast('Proving preference saved on this device.')}}><span className="radio-dot"/><div><strong>{title}</strong><p>{desc}</p></div></button>)}</div></section><section className="panel form-panel"><div className="panel-heading"><h2>Protocol parameters</h2></div><dl className="parameter-list"><div><dt>Standard standby</dt><dd>15 minutes</dd></div><div><dt>Degraded-provider standby</dt><dd>60 minutes</dd></div><div><dt>Pool logic</dt><dd>Immutable by design</dd></div><div><dt>Exit destination</dt><dd>Original depositing wallet</dd></div><div><dt>Live verification</dt><dd>Awaiting connection</dd></div></dl>{refreshAt&&<p className="field-help">Last checked locally at {refreshAt}.</p>}</section></div></>}
- {section==='activity'&&<section className="panel activity-panel"><div className="panel-heading"><h2>Your request ledger <span className="count">{drafts.length}</span></h2><button className="button outline compact-button" disabled={!drafts.length} onClick={()=>downloadFile('curtain-prepared-requests.json',{application:'Curtain',exportedAt:new Date().toISOString(),notice:'Prepared local requests only. Not signed or submitted.',requests:drafts})}><Download size={15}/>Export requests</button></div><div className="activity-filter"><Search size={17}/><input aria-label="Search prepared requests" placeholder="Search by action, asset or request ID…" value={filter} onChange={e=>setFilter(e.target.value)}/><span className="pill">Prepared locally</span></div>{visibleDrafts.length?<DraftRows items={visibleDrafts}/>:<div className="empty-ledger"><FileText size={35} strokeWidth={1}/><h2>{filter?'No matching requests.':'Every act begins with a blank page.'}</h2><p>{filter?'Try a different action or asset name.':'Prepare a shield, recipe, receiving registration, or disclosure plan. Your requests stay on this device until you export them.'}</p>{!filter&&<RouteLink to="/app/shield" className="button gold">Prepare your first action <ArrowRight size={16}/></RouteLink>}</div>}<Note>This ledger contains local plans. It is not a record of on-chain execution. No private keys or viewing keys are stored here.</Note></section>}
- <div className="app-bottomline"><span><LockKeyhole size={12}/>PRIVATE BY DESIGN. DISCLOSABLE BY CHOICE.</span><span>CURTAIN · ROBINHOOD CHAIN</span></div></div></div>{toast&&<div className="toast" role="status"><Check size={16}/>{toast}<button aria-label="Dismiss message" onClick={()=>setToast('')}><X size={14}/></button></div>}<dialog ref={detail} className="modal request-modal" onCancel={()=>setSelected(null)} onClick={e=>{if(e.target===e.currentTarget)setSelected(null)}}>{selected&&<><button className="modal-close" aria-label="Close request" onClick={()=>setSelected(null)}><X/></button><span className="eyebrow">YOUR NEXT ACT / REVIEW</span><h2>{selected.kind}</h2><span className="pill">Prepared · not submitted</span><dl className="request-details">{selected.amount!=='0'&&<><div><dt>{selected.details['inputUnit']?.startsWith('Vault shares')?'Input shares':'Amount'}</dt><dd>{selected.amount} {selected.details['inputUnit']?.startsWith('Vault shares')?'shares':selected.asset}</dd></div>{!selected.details['inputUnit']?.startsWith('Vault shares')&&<div><dt>Estimated protocol fee</dt><dd>{selected.fee} {selected.asset}</dd></div>}</>}{Object.entries(selected.details).map(([k,v])=><div key={k}><dt>{k.replace(/([A-Z])/g,' $1')}</dt><dd>{v}</dd></div>)}</dl><Note>Saved to this device. Network services are not yet connected; this request has not been signed, submitted, or executed.</Note><div className="request-actions"><button className="button gold" onClick={()=>downloadFile(`curtain-${selected.id.slice(0,8)}.json`,{...selected,executionStatus:'Not submitted'})}><Download size={16}/>Export request</button><button className="button outline" onClick={()=>{setSelected(null);navigate('/app/activity')}}>View ledger</button></div><button className="discard-button" onClick={()=>{setDrafts(d=>d.filter(x=>x.id!==selected.id));setSelected(null);setToast('Local request discarded.')}}><Trash2 size={14}/>Discard this local request</button></>}</dialog></main>
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Activity,
+  ArrowUpRight,
+  Coins,
+  ChevronRight,
+  Download,
+  Info,
+  LayoutDashboard,
+  Menu,
+  RefreshCw,
+  Repeat2,
+  Wallet,
+} from "lucide-react";
+import { formatUnits, isAddress, parseUnits, type Address } from "viem";
+import {
+  CHALLENGE_WINDOW_SECONDS,
+  ROBINHOOD_CHAIN_TOKENS,
+  TIERS,
+  VAULT_ABI,
+  type SwapQuote,
+} from "@curtain/sdk";
+import { Logo, RouteLink, Socials, useNav } from "./App";
+import { downloadFile } from "./domain";
+import { useWorkspaceTools } from "./useWorkspaceTools";
+import {
+  address,
+  apiUrl,
+  chain,
+  countdown,
+  ensureChain,
+  errorMessage,
+  publicClient,
+  provider,
+  stakeToken,
+  staking,
+  stakingBlock,
+  trustedVault,
+  validTicket,
+  type SavedTicket,
+} from "./integration";
+import { balanceText, useCurtain, type TokenData } from "./useCurtain";
+const nav = [
+  { id: "overview", path: "/app", name: "Overview", icon: LayoutDashboard },
+  { id: "swap", path: "/app/swap", name: "Swap", icon: Repeat2 },
+  { id: "stake", path: "/app/stake", name: "Stake", icon: Coins },
+  { id: "activity", path: "/app/activity", name: "Activity", icon: Activity },
+];
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <div className="notice">
+      <Info size={16} />
+      <p>{children}</p>
+    </div>
+  );
+}
+function Token({ token }: { token: TokenData }) {
+  return (
+    <span className="token-icon">
+      <img src={token.logo} alt={token.symbol} width={34} height={34} />
+    </span>
+  );
+}
+function rawAmount(value: string, d: number) {
+  if (
+    !new RegExp(`^(?:0|[1-9]\\d*)(?:\\.\\d{1,${Math.max(1, d)}})?$`).test(value) ||
+    (d === 0 && value.includes("."))
+  )
+    throw new Error(`Enter an amount with up to ${d} decimal places.`);
+  const raw = parseUnits(value, d);
+  if (raw <= 0n || raw >= 2n ** 256n)
+    throw new Error("Enter an amount greater than zero and within the supported range.");
+  return raw;
+}
+const statusCopy = {
+  awaiting_deposit: "Waiting for your deposit",
+  deposited: "Swapping…",
+  settling: "Delivering…",
+  paid: "Delivered",
+  blocked: "This token can't be sent to that recipient.",
+  expired: "Deposit didn't match this swap.",
+  refund_requested: "Refund in progress",
+  refunded: "Refunded to your wallet",
+  challenged: "This swap was already delivered; the refund was declined.",
+};
+export default function Dashboard({ path }: { path: string }) {
+  const { wallet, connect, navigate } = useNav();
+  const app = useCurtain(wallet);
+  const current = nav.find((n) => n.id === (path.split("/")[2] || "overview")) || nav[0]!;
+  useWorkspaceTools(current.id, navigate);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
+  const [from, setFrom] = useState("USDG");
+  const [to, setTo] = useState("NVDA");
+  const [amount, setAmount] = useState("");
+  const [recipient, setRecipient] = useState(wallet);
+  const [delayed, setDelayed] = useState(false);
+  const [delay, setDelay] = useState("3600");
+  const [customDelay, setCustomDelay] = useState("3600");
+  const [slippage, setSlippage] = useState(100);
+  const [quote, setQuote] = useState<SwapQuote>();
+  const [quoteError, setQuoteError] = useState("");
+  const [quoting, setQuoting] = useState(false);
+  const [latest, setLatest] = useState<SavedTicket>();
+  const [stakeAmount, setStakeAmount] = useState("");
+  const [tier, setTier] = useState<0 | 1 | 2>(0);
+  const importRef = useRef<HTMLInputElement>(null);
+  const requestNumber = useRef(0);
+  const input = app.tokens.find((t) => t.symbol === from);
+  const output = app.tokens.find((t) => t.symbol === to);
+  const delaySeconds = delayed ? Number(delay === "custom" ? customDelay : delay) : 0;
+  useEffect(() => {
+    setRecipient(wallet);
+    setLatest(undefined);
+    setMessage("");
+  }, [wallet]);
+  useEffect(() => {
+    setSideOpen(false);
+    setMessage("");
+  }, [path]);
+  useEffect(() => {
+    let alive = true;
+    setQuote(undefined);
+    setQuoteError("");
+    const load = async () => {
+      const number = ++requestNumber.current;
+      if (!input || !output || !amount || !apiUrl || current.id !== "swap") {
+        setQuoting(false);
+        return;
+      }
+      setQuoting(true);
+      try {
+        const q = await app.sdk.quote(
+          input.address,
+          output.address,
+          rawAmount(amount, input.decimals),
+          slippage,
+        );
+        if (alive && number === requestNumber.current) {
+          setQuote(q);
+          setQuoteError("");
+        }
+      } catch (e) {
+        if (alive && number === requestNumber.current) {
+          setQuote(undefined);
+          setQuoteError(errorMessage(e));
+        }
+      } finally {
+        if (alive && number === requestNumber.current) setQuoting(false);
+      }
+    };
+    const first = setTimeout(() => void load(), 400);
+    const timer = setInterval(() => void load(), 15000);
+    return () => {
+      alive = false;
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [input, output, amount, slippage, current.id, app.sdk]);
+  function link(hash: string, label: string) {
+    return (
+      <a
+        href={`${chain.blockExplorers.default.url}/tx/${hash}`}
+        target="_blank"
+        rel="noreferrer"
+        className="underlined-link"
+      >
+        {label}
+        <ArrowUpRight size={13} />
+      </a>
+    );
+  }
+  async function run(label: string, action: () => Promise<void>) {
+    if (busy) return;
+    setBusy(label);
+    setMessage("");
+    app.setError("");
+    try {
+      await ensureChain();
+      const accounts = await provider()?.request({ method: "eth_accounts" });
+      if (accounts?.[0]?.toLowerCase() !== wallet.toLowerCase())
+        throw new Error("Your wallet account changed. Reconnect before continuing.");
+      await action();
+    } catch (e) {
+      setMessage(errorMessage(e));
+      await app.refreshActivity(true);
+    } finally {
+      setBusy("");
+    }
+  }
+  function download(row: SavedTicket) {
+    downloadFile(`curtain-escape-ticket-${row.ticket.depositId}.json`, {
+      ...row,
+      chainId: row.chainId || chain.id,
+    });
+  }
+  async function swap() {
+    if (!input || !output || !app.vault || !quote?.available || quoting) return;
+    if (
+      !isAddress(recipient) ||
+      !address(recipient) ||
+      recipient.toLowerCase() === app.vault.toLowerCase()
+    ) {
+      setMessage("Enter a recipient address other than the zero address or vault.");
+      return;
+    }
+    if (
+      !Number.isInteger(delaySeconds) ||
+      (delayed ? delaySeconds < 1 : delaySeconds < 0) ||
+      delaySeconds > app.maxDelay
+    ) {
+      setMessage(`Choose a delay between 0 and ${app.maxDelay} seconds.`);
+      return;
+    }
+    await run("Swap", async () => {
+      const raw = rawAmount(amount, input.decimals);
+      if (input.balance === undefined || raw > input.balance)
+        throw new Error("Your token balance is too low for this swap.");
+      // Refresh immediately before signing so minimum output matches the current form.
+      const fresh = await app.sdk.quote(input.address, output.address, raw, slippage);
+      setQuote(fresh);
+      if (!fresh.available) throw new Error("No liquidity for this pair right now");
+      const fromBlock = await publicClient.getBlockNumber();
+      const details = {
+        createdAt: new Date().toISOString(),
+        tokenIn: from,
+        amountIn: formatUnits(raw, input.decimals),
+        tokenOut: to,
+        recipient,
+        delaySeconds,
+        chainId: chain.id,
+      };
+      let pendingId = "";
+      const result = await app.sdk
+        .swap(
+          {
+            tokenIn: input.address,
+            amountIn: raw,
+            tokenOut: output.address,
+            recipient: recipient as Address,
+            minOut: BigInt(fresh.minOutSuggested),
+            delaySeconds,
+          },
+          {
+            // Keep the ticket secrets before the wallet signs, so closing the tab mid-deposit
+            // can't strand funds without a refund path.
+            onIntent: (pending) => {
+              pendingId = pending.intentId;
+              app.addPending({
+                ...details,
+                intentId: pending.intentId,
+                pending,
+                fromBlock: fromBlock.toString(),
+              });
+            },
+          },
+        )
+        .catch((e: unknown) => {
+          // A wallet cancellation means no deposit was sent, so there is nothing to recover.
+          if (pendingId && errorMessage(e).startsWith("You cancelled"))
+            app.removePending(pendingId);
+          throw e;
+        });
+      const row: SavedTicket = {
+        ...details,
+        intentId: result.intentId,
+        ticket: result.ticket,
+        depositTx: result.depositTx,
+      };
+      app.addTicket(row);
+      app.removePending(result.intentId);
+      setLatest(row);
+      setAmount("");
+      setMessage("Deposit confirmed. Save your escape ticket.");
+      void app.refresh();
+    });
+  }
+  async function importTicket(file: File) {
+    try {
+      if (!address(wallet))
+        throw new Error("Connect the depositing wallet before importing a ticket.");
+      if (file.size > 100000) throw new Error("This ticket file is too large.");
+      const data: unknown = JSON.parse(await file.text());
+      const source = data as Partial<SavedTicket>;
+      const ticket = validTicket(data) ? data : source.ticket;
+      if (!validTicket(ticket)) throw new Error("This file is not a valid Curtain escape ticket.");
+      if (!trustedVault(ticket.vault))
+        throw new Error(
+          "This ticket is for a different vault than Curtain's. It was not imported.",
+        );
+      if (source.chainId !== undefined && source.chainId !== chain.id)
+        throw new Error("This ticket belongs to a different network.");
+      const [owner, token, raw] = await publicClient.readContract({
+        address: ticket.vault,
+        abi: VAULT_ABI,
+        functionName: "deposits",
+        args: [BigInt(ticket.depositId)],
+      });
+      if (owner.toLowerCase() !== wallet.toLowerCase())
+        throw new Error("Only the wallet that deposited can import this refund ticket.");
+      const { decimals } = await import("./integration");
+      const d = await decimals(token);
+      const symbol =
+        app.tokens.find((t) => t.address.toLowerCase() === token.toLowerCase())?.symbol ||
+        `${token.slice(0, 6)}…${token.slice(-4)}`;
+      app.addTicket({
+        intentId:
+          typeof source.intentId === "string" && /^[\da-f]{32}$/i.test(source.intentId)
+            ? source.intentId
+            : `imported-${ticket.depositId}`,
+        ticket,
+        createdAt:
+          typeof source.createdAt === "string" && !Number.isNaN(Date.parse(source.createdAt))
+            ? source.createdAt
+            : new Date().toISOString(),
+        tokenIn: symbol,
+        amountIn: formatUnits(raw, d),
+        tokenOut: typeof source.tokenOut === "string" ? source.tokenOut : "Recipient token",
+        recipient: typeof source.recipient === "string" ? source.recipient : "—",
+        chainId: chain.id,
+        ...(typeof source.depositTx === "string" && /^0x[\da-f]{64}$/i.test(source.depositTx)
+          ? { depositTx: source.depositTx }
+          : {}),
+        ...(typeof source.delaySeconds === "number" ? { delaySeconds: source.delaySeconds } : {}),
+      });
+      setMessage("Ticket imported. Refunds use the vault directly.");
+    } catch (e) {
+      setMessage(errorMessage(e));
+    }
+  }
+  async function refund(row: SavedTicket, finish: boolean) {
+    await run(finish ? "Finish refund" : "Refund", async () => {
+      const hash = finish
+        ? await app.sdk.finalizeRefund(row.ticket)
+        : await app.sdk.requestRefund(row.ticket);
+      setMessage(`Refund transaction confirmed: ${hash}`);
+      await app.refreshActivity(true);
+    });
+  }
+  function rows(onlyOpen = false) {
+    const list = app.tickets.filter(
+      (r) =>
+        !onlyOpen ||
+        (!["paid", "refunded", "challenged"].includes(app.statuses[r.intentId]?.status || "") &&
+          ![3, 4].includes(app.deposits[r.intentId]?.status || 0)),
+    );
+    return list.length || app.pending.length ? (
+      <div className="v2-activity">
+        {app.pending.map((p) => (
+          <article className="v2-activity-row" key={`pending-${p.intentId}`}>
+            <div>
+              <small>{new Date(p.createdAt).toLocaleString()}</small>
+              <strong className="v2-swap-pair">
+                {p.amountIn} {p.tokenIn} → {p.tokenOut}
+              </strong>
+              <span className="pill">Waiting for deposit</span>
+              <p>Your escape ticket appears here as soon as the deposit confirms.</p>
+            </div>
+          </article>
+        ))}
+        {list.map((row) => {
+          const status = app.statuses[row.intentId];
+          const deposit = app.deposits[row.intentId];
+          const foreignVault = !trustedVault(row.ticket.vault);
+          const wrongChain =
+            (row.chainId !== undefined && row.chainId !== chain.id) || foreignVault;
+          const requested = deposit?.status === 2;
+          const terminal =
+            deposit?.status === 3 ||
+            deposit?.status === 4 ||
+            ["paid", "refunded", "challenged"].includes(status?.status || "");
+          const text =
+            deposit?.status === 4
+              ? statusCopy.refunded
+              : deposit?.status === 3
+                ? statusCopy.challenged
+                : requested
+                  ? statusCopy.refund_requested
+                  : status
+                    ? status.status === "deposited" && row.delaySeconds
+                      ? "Scheduled (private delay)"
+                      : statusCopy[status.status]
+                    : "Service unavailable — ticket ready";
+          const remaining = (deposit?.requestedAt || 0) + CHALLENGE_WINDOW_SECONDS + 1 - app.now;
+          return (
+            <article
+              className="v2-activity-row"
+              key={`${row.ticket.vault}-${row.ticket.depositId}`}
+            >
+              <div>
+                <small>{new Date(row.createdAt).toLocaleString()}</small>
+                <strong className="v2-swap-pair">
+                  {ROBINHOOD_CHAIN_TOKENS.find((t) => t.symbol === row.tokenIn)?.logo && (
+                    <img
+                      src={ROBINHOOD_CHAIN_TOKENS.find((t) => t.symbol === row.tokenIn)!.logo}
+                      alt=""
+                      width={24}
+                      height={24}
+                    />
+                  )}{" "}
+                  {row.amountIn} {row.tokenIn} →{" "}
+                  {ROBINHOOD_CHAIN_TOKENS.find((t) => t.symbol === row.tokenOut)?.logo && (
+                    <img
+                      src={ROBINHOOD_CHAIN_TOKENS.find((t) => t.symbol === row.tokenOut)!.logo}
+                      alt=""
+                      width={24}
+                      height={24}
+                    />
+                  )}{" "}
+                  {row.tokenOut}
+                </strong>
+                <span>
+                  Recipient{" "}
+                  {row.recipient.length > 16
+                    ? `${row.recipient.slice(0, 6)}…${row.recipient.slice(-4)}`
+                    : row.recipient}
+                </span>
+                <span className="pill">{text}</span>
+                {status?.blockedReason && <p>{status.blockedReason}</p>}
+                {wrongChain && (
+                  <p>
+                    {foreignVault
+                      ? "This ticket is for a different vault than this app uses."
+                      : `Switch configuration to network ${row.chainId} to use this ticket.`}
+                  </p>
+                )}
+              </div>
+              <div className="v2-actions">
+                <button onClick={() => download(row)} className="text-button">
+                  <Download size={14} />
+                  Ticket
+                </button>
+                {row.depositTx && link(row.depositTx, "Deposit")}
+                {status?.payoutTx && link(status.payoutTx, "Payout")}
+                {!terminal &&
+                  !wrongChain &&
+                  (requested ? (
+                    <>
+                      <small>
+                        {remaining > 0
+                          ? `Finish refund in ${countdown(remaining)}`
+                          : "Challenge window complete"}
+                      </small>
+                      <button
+                        className="button gold"
+                        disabled={!!busy || remaining > 0}
+                        onClick={() => void refund(row, true)}
+                      >
+                        Finish refund
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <small>
+                        {app.now < app.sdk.refundAvailableAt(row.ticket)
+                          ? `Refund available in ${countdown(app.sdk.refundAvailableAt(row.ticket) - app.now)}`
+                          : "Refund available"}
+                      </small>
+                      {app.now >= app.sdk.refundAvailableAt(row.ticket) && (
+                        <button
+                          className="button gold"
+                          disabled={!!busy}
+                          onClick={() => void refund(row, false)}
+                        >
+                          Get my deposit back
+                        </button>
+                      )}
+                    </>
+                  ))}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="empty-compact">
+        <h3>Your next act awaits.</h3>
+        <p>No {onlyOpen ? "open swaps" : "saved tickets"} for this wallet.</p>
+      </div>
+    );
+  }
+  function picker(id: string, value: string, set: (v: string) => void) {
+    const token = app.tokens.find((t) => t.symbol === value);
+    return (
+      <div className="asset-input">
+        {token && <Token token={token} />}
+        <select id={id} value={value} onChange={(e) => set(e.target.value)}>
+          {app.tokens.map((t) => (
+            <option key={t.symbol} value={t.symbol}>
+              {t.symbol} · {balanceText(t)}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+  function positionTable() {
+    return (
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Your positions</h2>
+          <span title="After unlocking, a position earns at 1×. Withdraw and restake to earn a multiplier again.">
+            <Info size={16} />
+          </span>
+        </div>
+        {app.positions.length ? (
+          <div className="v2-table-scroll">
+            <table className="v2-position-table">
+              <thead>
+                <tr>
+                  <th>Amount</th>
+                  <th>Tier</th>
+                  <th>Unlock</th>
+                  <th>Rewards</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {app.positions.map((p) => (
+                  <tr key={p.id.toString()}>
+                    <td>
+                      {app.stakeDecimals === undefined
+                        ? "—"
+                        : formatUnits(p.amount, app.stakeDecimals)}{" "}
+                      CRTN
+                    </td>
+                    <td>
+                      {TIERS.find((t) => t.tier === app.positionTiers[p.id.toString()])
+                        ? `${TIERS[app.positionTiers[p.id.toString()]!]!.days}d · ${TIERS[app.positionTiers[p.id.toString()]!]!.multiplier}×`
+                        : "Loading tier…"}
+                    </td>
+                    <td>
+                      {new Date(p.unlockAt * 1000).toLocaleString()}
+                      <small>
+                        {p.closed
+                          ? "Closed"
+                          : p.unlockAt > app.now
+                            ? countdown(p.unlockAt - app.now)
+                            : "Unlocked · earns at 1×"}
+                      </small>
+                    </td>
+                    <td>
+                      {app.rewardDecimals === undefined
+                        ? "—"
+                        : formatUnits(p.earned, app.rewardDecimals)}
+                    </td>
+                    <td>
+                      <button
+                        className="text-button"
+                        disabled={!!busy || p.closed || p.earned === 0n}
+                        onClick={() =>
+                          void run("Claim", async () => {
+                            await app.sdk.claim(p.id);
+                            await app.refreshStaking();
+                            setMessage("Rewards claimed.");
+                          })
+                        }
+                      >
+                        Claim
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={!!busy || p.closed || p.unlockAt > app.now}
+                        onClick={() =>
+                          void run("Withdraw", async () => {
+                            await app.sdk.withdraw(p.id);
+                            await app.refreshStaking();
+                            setMessage("Position withdrawn.");
+                          })
+                        }
+                      >
+                        Withdraw
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-compact">
+            <p>
+              {stakingBlock === undefined
+                ? "Position history is not configured. Set the staking deployment block."
+                : "No positions for this wallet."}
+            </p>
+          </div>
+        )}
+      </section>
+    );
+  }
+  return (
+    <main id="main" className="app-layout">
+      <aside className={`sidebar ${sideOpen ? "expanded" : ""}`}>
+        <div className="sidebar-caption">
+          <span className="eyebrow">YOUR PRIVATE BOX</span>
+          <span className="box-no">Nº 01</span>
+        </div>
+        <nav aria-label="Application navigation">
+          {nav.map((n) => (
+            <RouteLink
+              key={n.id}
+              to={n.path}
+              className={`side-link ${n.id === current.id ? "selected" : ""}`}
+            >
+              <n.icon size={18} />
+              {n.name}
+            </RouteLink>
+          ))}
+          <span className="side-link">Lending — coming soon</span>
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="side-motto">
+            <Logo compact />
+            <p>
+              The position is yours.
+              <br />
+              <em>So is the privacy.</em>
+            </p>
+          </div>
+          <Socials />
+          <div className="side-legal">
+            <RouteLink to="/legal/terms">Terms</RouteLink>
+            <RouteLink to="/legal/privacy">Privacy</RouteLink>
+            <RouteLink to="/legal/risk">Risks</RouteLink>
+          </div>
+          <RouteLink to="/" className="return-link">
+            Back to the overture <ArrowUpRight size={13} />
+          </RouteLink>
+        </div>
+      </aside>
+      <div className="app-content">
+        <div className="app-topline">
+          <button
+            className="mobile-sidebar"
+            aria-label="Toggle application navigation"
+            aria-expanded={sideOpen}
+            onClick={() => setSideOpen((v) => !v)}
+          >
+            <Menu size={18} />
+          </button>
+          <span className="breadcrumbs">
+            PRIVATE BOX <ChevronRight size={12} />
+            {current.name}
+          </span>
+          <button className="wallet-button" onClick={connect}>
+            <Wallet size={16} />
+            {wallet ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : "Connect wallet"}
+          </button>
+        </div>
+        <div className="dashboard-body">
+          <div className="dashboard-heading">
+            <div>
+              <p className="eyebrow">DRAW THE CURTAIN</p>
+              <h1>{current.name}</h1>
+              <p>Private swaps. Considered timing. Rewards for your next act.</p>
+            </div>
+            <button
+              className="text-button"
+              disabled={!!busy}
+              onClick={() => {
+                void app.refresh();
+                void app.refreshActivity(true);
+                void app.refreshStaking();
+              }}
+            >
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+          </div>
+          {!wallet && <Note>Connect your wallet to see balances, swaps and rewards.</Note>}
+          {app.error && (
+            <p role="alert" className="form-error">
+              {app.error}
+            </p>
+          )}
+          {app.offline && (
+            <Note>
+              Curtain's service isn't reachable. Your funds are safe; refunds still work from
+              Activity.
+            </Note>
+          )}
+          {app.storageWarning && (
+            <p role="alert" className="form-error">
+              {app.storageWarning}
+            </p>
+          )}
+          {message && (
+            <p role="status" className="notice">
+              {message}
+            </p>
+          )}
+          {busy && (
+            <p role="status" className="notice">
+              {busy} in progress. Your wallet may ask for approval and then a transaction.
+            </p>
+          )}
+          {current.id === "overview" && (
+            <>
+              <div className="overview-grid">
+                <section className="panel">
+                  <div className="panel-heading">
+                    <h2>Your balances</h2>
+                    <span className="pill">Raw token units</span>
+                  </div>
+                  <div className="asset-table">
+                    {app.tokens.map((t) => (
+                      <div className="asset-row" key={t.symbol}>
+                        <div>
+                          <Token token={t} />
+                          <span>
+                            <strong>{t.symbol}</strong>
+                            <small>{t.name}</small>
+                          </span>
+                        </div>
+                        <span>{balanceText(t)}</span>
+                        <RouteLink to="/app/swap">
+                          Swap <ArrowUpRight size={14} />
+                        </RouteLink>
+                      </div>
+                    ))}
+                    {!app.tokens.length && (
+                      <p className="empty-compact">
+                        Token balances are waiting for network configuration.
+                      </p>
+                    )}
+                  </div>
+                </section>
+                <section className="panel next-act">
+                  <p className="eyebrow">THE NEXT ACT</p>
+                  <h2>On your terms.</h2>
+                  <RouteLink to="/app/swap">
+                    Swap privately <ArrowUpRight size={16} />
+                  </RouteLink>
+                  <RouteLink to="/app/stake">
+                    Earn up to 2× rewards <ArrowUpRight size={16} />
+                  </RouteLink>
+                  <p>Lending coming soon.</p>
+                </section>
+              </div>
+              <section className="panel v2-section">
+                <div className="panel-heading">
+                  <h2>Open swaps</h2>
+                </div>
+                {rows(true)}
+              </section>
+              <div className="v2-section">
+                {stakeToken ? positionTable() : <Note>Staking opens when $CRTN launches.</Note>}
+              </div>
+            </>
+          )}
+          {current.id === "swap" && (
+            <div className="workspace-grid">
+              <section className="panel form-panel">
+                <div className="panel-heading">
+                  <h2>Swap privately</h2>
+                </div>
+                <label className="field-label" htmlFor="swap-from">
+                  From
+                </label>
+                {picker("swap-from", from, setFrom)}
+                <label className="field-label" htmlFor="swap-amount">
+                  Amount
+                </label>
+                <div className="amount-input">
+                  <input
+                    id="swap-amount"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="0"
+                  />
+                  <button
+                    className="text-button"
+                    disabled={input?.balance === undefined}
+                    onClick={() =>
+                      input &&
+                      input.balance !== undefined &&
+                      setAmount(formatUnits(input.balance, input.decimals))
+                    }
+                  >
+                    Max
+                  </button>
+                </div>
+                <label className="field-label" htmlFor="swap-to">
+                  To
+                </label>
+                {picker("swap-to", to, setTo)}
+                <label className="field-label" htmlFor="swap-recipient">
+                  Recipient
+                </label>
+                <input
+                  id="swap-recipient"
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  placeholder="0x…"
+                />
+                <button className="text-button" onClick={() => setRecipient(wallet)}>
+                  Use my wallet
+                </button>
+                <span className="field-help">
+                  Sending to a fresh address gives you the most privacy.
+                </span>
+                <p className="field-label">Timing</p>
+                <div className="segmented">
+                  {[false, true].map((v) => (
+                    <button
+                      key={String(v)}
+                      aria-pressed={delayed === v}
+                      onClick={() => setDelayed(v)}
+                    >
+                      {v ? "Private delay" : "Instant"}
+                    </button>
+                  ))}
+                </div>
+                {delayed && (
+                  <>
+                    <label className="field-label" htmlFor="swap-delay">
+                      Delay window
+                    </label>
+                    <select
+                      id="swap-delay"
+                      value={delay}
+                      onChange={(e) => setDelay(e.target.value)}
+                    >
+                      {[
+                        [3600, "1 hour"],
+                        [21600, "6 hours"],
+                        [86400, "1 day"],
+                        [604800, "7 days"],
+                        [2592000, "30 days"],
+                        [15552000, "180 days"],
+                      ].map(([s, label]) => (
+                        <option key={s} value={s} disabled={Number(s) > app.maxDelay}>
+                          {label}
+                        </option>
+                      ))}
+                      <option value="custom">Custom</option>
+                    </select>
+                    {delay === "custom" && (
+                      <>
+                        <label className="field-label" htmlFor="custom-delay">
+                          Window in seconds (maximum {app.maxDelay})
+                        </label>
+                        <input
+                          id="custom-delay"
+                          type="number"
+                          min={1}
+                          max={app.maxDelay}
+                          value={customDelay}
+                          onChange={(e) => setCustomDelay(e.target.value)}
+                        />
+                      </>
+                    )}
+                    <span className="field-help">
+                      Curtain pays out at a random time inside this window. Longer windows are more
+                      private.
+                    </span>
+                  </>
+                )}
+                <label className="field-label" htmlFor="slippage">
+                  Slippage
+                </label>
+                <select
+                  id="slippage"
+                  value={slippage}
+                  onChange={(e) => setSlippage(Number(e.target.value))}
+                >
+                  {[50, 100, 200].map((bps) => (
+                    <option key={bps} value={bps}>
+                      {bps / 100}%
+                    </option>
+                  ))}
+                </select>
+                <div className="fee-breakdown" aria-live="polite">
+                  {quoting && <p>Updating quote…</p>}
+                  {quote && output && (
+                    <>
+                      <div>
+                        <span>You receive ≈</span>
+                        <strong>
+                          {formatUnits(BigInt(quote.expectedOut), output.decimals)} {to}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Minimum</span>
+                        <span>
+                          {formatUnits(BigInt(quote.minOutSuggested), output.decimals)} {to}
+                        </span>
+                      </div>
+                      <div>
+                        <span>Route</span>
+                        <span>{quote.venue}</span>
+                      </div>
+                      <div>
+                        <span>Protocol fee</span>
+                        <span>0.20%</span>
+                      </div>
+                      <div>
+                        <span>Keeper fee</span>
+                        <span>0.05%</span>
+                      </div>
+                      {!quote.available && <p>No liquidity for this pair right now</p>}
+                    </>
+                  )}
+                  {quoteError && (
+                    <p role="alert" className="form-error">
+                      {quoteError}
+                    </p>
+                  )}
+                </div>
+                <button
+                  className="button gold v2-primary"
+                  disabled={
+                    !!busy || !wallet || !app.vault || !quote?.available || quoting || app.offline
+                  }
+                  onClick={() => void swap()}
+                >
+                  Swap privately <ArrowUpRight size={16} />
+                </button>
+              </section>
+              <div>
+                <Note>
+                  Your deposit shows your wallet, token and amount. Longer delays and fresh
+                  recipient addresses give more privacy.
+                </Note>
+                <Note>
+                  If the price falls below your minimum, the swap waits for a better price. After
+                  the deadline, use your escape ticket to refund.
+                </Note>
+                {latest && (
+                  <section className="panel form-panel v2-section">
+                    <h2>Your escape ticket</h2>
+                    <p>
+                      Keep this file. If Curtain is ever unavailable, it lets you take your deposit
+                      back.
+                    </p>
+                    <button className="button gold" onClick={() => download(latest)}>
+                      <Download size={16} />
+                      Download escape ticket
+                    </button>
+                    <p className="field-help">This file is private. Store it somewhere safe.</p>
+                    {link(latest.depositTx!, "Deposit transaction")}
+                    {rows()}
+                  </section>
+                )}
+              </div>
+            </div>
+          )}
+          {current.id === "stake" &&
+            (!stakeToken ? (
+              <section className="panel empty-compact">
+                <h3>The next act awaits.</h3>
+                <p>Staking opens when $CRTN launches.</p>
+              </section>
+            ) : (
+              <>
+                <section className="panel form-panel">
+                  <h2>Earn up to 2× rewards</h2>
+                  {!staking && <Note>Staking is not configured.</Note>}
+                  <label className="field-label" htmlFor="stake-amount">
+                    Amount · CRTN{" "}
+                    {app.stakeBalance !== undefined && app.stakeDecimals !== undefined
+                      ? `· Balance ${formatUnits(app.stakeBalance, app.stakeDecimals)}`
+                      : ""}
+                  </label>
+                  <input
+                    id="stake-amount"
+                    inputMode="decimal"
+                    value={stakeAmount}
+                    onChange={(e) => setStakeAmount(e.target.value)}
+                  />
+                  <div className="v2-tiers">
+                    {TIERS.map((t) => (
+                      <button
+                        key={t.tier}
+                        className="panel"
+                        aria-pressed={tier === t.tier}
+                        onClick={() => setTier(t.tier)}
+                      >
+                        <strong>{t.days} days</strong>
+                        <span>{t.multiplier}× rewards</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    className="button gold"
+                    disabled={
+                      !!busy ||
+                      !wallet ||
+                      !staking ||
+                      app.stakeDecimals === undefined ||
+                      !stakeAmount ||
+                      stakingBlock === undefined
+                    }
+                    onClick={() =>
+                      void run("Stake", async () => {
+                        const raw = rawAmount(stakeAmount, app.stakeDecimals!);
+                        if (app.stakeBalance === undefined || raw > app.stakeBalance)
+                          throw new Error("Your CRTN balance is too low.");
+                        await app.sdk.stake(stakeToken!, raw, tier);
+                        setStakeAmount("");
+                        await app.refreshStaking();
+                        setMessage("Your position is staked.");
+                      })
+                    }
+                  >
+                    Stake
+                  </button>
+                  <span
+                    className="field-help"
+                    title="After unlocking, a position earns at 1×. Withdraw and restake to earn a multiplier again."
+                  >
+                    After unlocking, a position earns at 1×. Withdraw and restake to earn a
+                    multiplier again.
+                  </span>
+                </section>
+                <div className="v2-section">{positionTable()}</div>
+              </>
+            ))}
+          {current.id === "activity" && (
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>Your swaps & tickets</h2>
+                <button
+                  className="text-button"
+                  disabled={!wallet || !!busy}
+                  onClick={() => importRef.current?.click()}
+                >
+                  Import ticket
+                </button>
+                <input
+                  ref={importRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="v2-file-input"
+                  aria-label="Import escape ticket"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void importTicket(file);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              <Note>
+                Keep this file. If Curtain is ever unavailable, it lets you take your deposit back.
+                Tickets stay on your device; refunds use the chain directly.
+              </Note>
+              {rows()}
+            </section>
+          )}
+        </div>
+      </div>
+    </main>
+  );
 }

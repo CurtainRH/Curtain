@@ -189,7 +189,9 @@ const curtain = new CurtainClient({
 |---|---|
 | `config()` | `GET /config` |
 | `quote(tokenIn, tokenOut, amountIn, slippageBps?)` | `GET /quote`, returns a typed `SwapQuote` |
-| `swap({ tokenIn, amountIn, tokenOut, recipient, minOut, delaySeconds })` | Creates the intent, approves the vault if needed, deposits. Returns `{ intentId, ticket, depositTx }`. It may ask the wallet for two signatures (approve, then deposit). |
+| `swap({ tokenIn, amountIn, tokenOut, recipient, minOut, delaySeconds }, { onIntent? })` | Creates the intent, approves the vault if needed, deposits. Returns `{ intentId, ticket, depositTx }`. It may ask the wallet for two signatures (approve, then deposit). `onIntent(pending)` fires **before** the wallet is asked to sign: persist `{ intentId, vault, deadline, salt }` there. |
+| `findDepositId(publicClient, pending, depositor, fromBlock)` | Recovers the deposit id for a pending ticket from `Deposited` events (undefined if it never landed). |
+| `new CurtainClient({ ..., vaultAddress })` | **Always set `vaultAddress` from `VITE_VAULT_ADDR`.** The SDK then refuses to deposit into, or refund from, any other vault, even if the API or an imported ticket names one. |
 | `status(intentId)` | `GET /intents/:id`, returns a typed `IntentStatus` |
 | `refundAvailableAt(ticket)` | Unix time from which `requestRefund` works (`deadline + 180`) |
 | `requestRefund(ticket)` | Starts the escape hatch. Must be the depositor's wallet. |

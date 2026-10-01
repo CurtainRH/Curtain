@@ -8,7 +8,7 @@ import { pgliteDb } from "@curtain/db/pglite";
 import { createApi, mockQuoter, mockRoute, Operator } from "@curtain/operator";
 import { parseAbi, parseEther, type Address, type Hex } from "viem";
 import { startDevnet, type Devnet } from "../../../scripts/devnet";
-import { CurtainClient, ERC20_ABI, positionsOf, STAKING_ABI } from "../src/index";
+import { CurtainClient, ERC20_ABI, findDepositId, positionsOf, STAKING_ABI, type PendingTicket } from "../src/index";
 
 setDefaultTimeout(180_000);
 const MOCK = parseAbi(["function mint(address to, uint256 amount)", "function setRate(address tokenIn, address tokenOut, uint256 rateWad)"]);
@@ -80,6 +80,27 @@ describe("CurtainClient (e2e)", () => {
     }
     expect((await client.status(s.intentId)).status).toBe("paid");
     expect(await bal(tokens["SPY"]!, fresh)).toBeGreaterThanOrEqual(parseEther("0.99"));
+  });
+
+  it("saves the ticket before depositing, recovers the deposit id, and refuses a foreign vault", async () => {
+    const me = d.wallets.user.account!.address;
+    chainNow = await d.now();
+    let pending: PendingTicket | undefined;
+    const s = await client.swap(
+      { tokenIn: tokens["USDG"]!, amountIn: parseEther("10"), tokenOut: tokens["SPY"]!, recipient: me, minOut: parseEther("0.01"), delaySeconds: 3600 },
+      { onIntent: (p) => { pending = p; } },
+    );
+    expect(pending).toBeDefined();
+    expect(pending!.salt).toBe(s.ticket.salt);
+    expect(await findDepositId(d.publicClient, pending!, me)).toBe(BigInt(s.ticket.depositId));
+
+    // A client pinned to the real vault refuses tickets (and API responses) naming another vault.
+    const pinned = new CurtainClient({ apiUrl: `http://127.0.0.1:${server.port}`, publicClient: d.publicClient, walletClient: d.wallets.user, vaultAddress: d.deployment.vault });
+    await expect(pinned.requestRefund({ ...s.ticket, vault: "0x000000000000000000000000000000000000dEaD" })).rejects.toThrow(/Refusing to use vault/);
+    const wrongPin = new CurtainClient({ apiUrl: `http://127.0.0.1:${server.port}`, publicClient: d.publicClient, walletClient: d.wallets.user, vaultAddress: "0x000000000000000000000000000000000000dEaD" });
+    const usdgBefore = await bal(tokens["USDG"]!, me);
+    await expect(wrongPin.swap({ tokenIn: tokens["USDG"]!, amountIn: parseEther("1"), tokenOut: tokens["SPY"]!, recipient: me, minOut: 1n, delaySeconds: 0 })).rejects.toThrow(/Refusing to use vault/);
+    expect(await bal(tokens["USDG"]!, me)).toBe(usdgBefore); // nothing approved or sent
   });
 
   it("refunds through the escape ticket when the operator never pays", async () => {

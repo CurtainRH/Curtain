@@ -11,7 +11,7 @@
  *
  * Staking: `stake(amount, tier)`, `claim(id)`, `withdraw(id)`, `earned(id)`.
  */
-import { decodeEventLog, type Address, type Hex, type PublicClient, type WalletClient } from "viem";
+import { decodeEventLog, encodeAbiParameters, getAddress, keccak256, type Address, type Hex, type PublicClient, type WalletClient } from "viem";
 import { ERC20_ABI, STAKING_ABI, VAULT_ABI } from "./abi";
 
 export * from "./abi";
@@ -73,8 +73,23 @@ export interface EscapeTicket {
   salt: Hex;
 }
 
+/** An escape ticket before its deposit has landed (no deposit id yet). See `onIntent`. */
+export interface PendingTicket {
+  intentId: string;
+  vault: Address;
+  deadline: string;
+  salt: Hex;
+}
+
 export interface CurtainConfig {
   apiUrl: string;
+  /**
+   * The vault address this app trusts (from its own config, not the API). When set, `swap()`
+   * refuses to approve or deposit if the API names a different vault, and refunds refuse
+   * tickets for another vault. Set it in production: a compromised API must not be able to
+   * redirect deposits.
+   */
+  vaultAddress?: Address;
   publicClient: PublicClient;
   walletClient?: WalletClient;
   stakingAddress?: Address;
@@ -113,12 +128,31 @@ export class CurtainClient {
     return this.api<SwapQuote>(`/quote?${q}`);
   }
 
-  /** Creates the intent, approves the vault if needed, and deposits. */
-  async swap(p: SwapParams): Promise<{ intentId: string; ticket: EscapeTicket; depositTx: Hex }> {
+  private checkVault(vault: Address): void {
+    if (this.cfg.vaultAddress && getAddress(vault) !== getAddress(this.cfg.vaultAddress)) {
+      throw new Error(`Refusing to use vault ${vault}: this app is configured for ${this.cfg.vaultAddress}`);
+    }
+  }
+
+  /**
+   * Creates the intent, approves the vault if needed, and deposits. `onIntent` receives the
+   * escape ticket's secrets BEFORE the wallet is asked to deposit: persist them there, so a
+   * browser closed mid-deposit still leaves the user able to refund (recover the deposit id
+   * later with `findDepositId`).
+   */
+  async swap(
+    p: SwapParams,
+    opts: { onIntent?: (pending: PendingTicket) => void | Promise<void> } = {},
+  ): Promise<{ intentId: string; ticket: EscapeTicket; depositTx: Hex }> {
     const wallet = this.wallet;
     const owner = wallet.account!.address;
     // The operator matches the deposit on (depositor, hash), so it must come from this wallet.
     const intent = await this.api<{ id: string; deadline: string; salt: Hex; deadlineHash: Hex; vault: Address }>("/intents", { ...p, depositor: owner });
+    this.checkVault(intent.vault);
+    if (deadlineHashOf(BigInt(intent.deadline), intent.salt) !== intent.deadlineHash) {
+      throw new Error("The service returned an inconsistent escape ticket; nothing was deposited.");
+    }
+    await opts.onIntent?.({ intentId: intent.id, vault: intent.vault, deadline: intent.deadline, salt: intent.salt });
     const { publicClient } = this.cfg;
 
     const allowance = await publicClient.readContract({ address: p.tokenIn, abi: ERC20_ABI, functionName: "allowance", args: [owner, intent.vault] });
@@ -154,6 +188,7 @@ export class CurtainClient {
   }
 
   async requestRefund(t: EscapeTicket): Promise<Hex> {
+    this.checkVault(t.vault);
     const w = this.wallet;
     return this.sendTx(await w.writeContract({
       chain: w.chain, account: w.account!, address: t.vault, abi: VAULT_ABI, functionName: "requestRefund",
@@ -163,6 +198,7 @@ export class CurtainClient {
 
   /** Callable by anyone once the 10-minute challenge window has passed; pays the depositor. */
   async finalizeRefund(t: EscapeTicket): Promise<Hex> {
+    this.checkVault(t.vault);
     const w = this.wallet;
     return this.sendTx(await w.writeContract({
       chain: w.chain, account: w.account!, address: t.vault, abi: VAULT_ABI, functionName: "finalizeRefund", args: [BigInt(t.depositId)],
@@ -222,6 +258,30 @@ export class CurtainClient {
     await this.send(hash);
     return hash;
   }
+}
+
+/** keccak256(abi.encode(deadline, salt)): the hash a deposit carries on-chain. */
+export function deadlineHashOf(deadline: bigint, salt: Hex): Hex {
+  return keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "bytes32" }], [deadline, salt]));
+}
+
+/**
+ * Finds the deposit id for a pending ticket (see `swap`'s `onIntent`) from the vault's
+ * `Deposited` events: depositor and hash must both match. Returns undefined if no such deposit
+ * was made (e.g. the user rejected it in their wallet).
+ */
+export async function findDepositId(
+  publicClient: PublicClient,
+  pending: PendingTicket,
+  depositor: Address,
+  fromBlock: bigint = 0n,
+): Promise<bigint | undefined> {
+  const hash = deadlineHashOf(BigInt(pending.deadline), pending.salt);
+  const logs = await publicClient.getContractEvents({
+    address: pending.vault, abi: VAULT_ABI, eventName: "Deposited", args: { depositor }, fromBlock,
+  });
+  const hit = logs.find((l) => (l.args as { deadlineHash?: Hex }).deadlineHash?.toLowerCase() === hash.toLowerCase());
+  return hit ? (hit.args as { depositId: bigint }).depositId : undefined;
 }
 
 export interface StakePosition {

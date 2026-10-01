@@ -1,9 +1,328 @@
-import { useEffect,useRef,useState } from 'react';
-import { ArrowDown,ArrowUpRight,Volume2,VolumeX } from 'lucide-react';
-import {gsap} from 'gsap';
-import {Logo,RouteLink} from './App';
-export function TheatreEntrance(){const [open,setOpen]=useState(()=>{try{return localStorage.getItem('curtain-entered')!=='yes'}catch{return true}});const el=useRef<HTMLDialogElement>(null);const opening=useRef(false);useEffect(()=>{const replay=()=>{opening.current=false;setOpen(true)};addEventListener('curtain:replay',replay);return()=>removeEventListener('curtain:replay',replay)},[]);useEffect(()=>{if(!open)return;el.current?.showModal();const previous=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{document.body.style.overflow=previous}},[open]);function enter(){if(opening.current)return;opening.current=true;try{localStorage.setItem('curtain-entered','yes')}catch{}const reduced=document.documentElement.dataset['motion']==='off'||matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced){setOpen(false);return}const node=el.current!;gsap.timeline({onComplete:()=>{setOpen(false);document.querySelector<HTMLElement>('.hero h1')?.focus({preventScroll:true})}}).to(node.querySelector('.entrance-invitation'),{opacity:0,y:-22,duration:.35}).to(node.querySelector('.entrance-left'),{xPercent:-101,duration:1.75,ease:'power3.inOut'},.2).to(node.querySelector('.entrance-right'),{xPercent:101,duration:1.75,ease:'power3.inOut'},.2).to(node,{backgroundColor:'rgba(0,0,0,0)',duration:.2},.3)}return open?<dialog ref={el} className="theatre-entrance" aria-label="Welcome to the Curtain theatre" onCancel={e=>{e.preventDefault();enter()}}><div className="entrance-left"/><div className="entrance-right"/><div className="entrance-invitation"><Logo compact/><p className="eyebrow">A PRIVATE PERFORMANCE</p><h2>The world is a stage.<br/><em>This one is yours.</em></h2><span className="invitation-rule"/><button className="raise-curtain" onClick={enter}>Raise the curtain <ArrowUpRight size={18}/></button><p>CURTAIN · PRIVATE FINANCE IN THREE ACTS</p></div><button className="skip-entrance" onClick={enter}>Enter directly</button></dialog>:null}
-const scenes=[{roman:'I',name:'A private position',title:<>Hold your own.</>,copy:'In a world that watches every move, your portfolio deserves its own private box.',detail:'Shielded Stock Tokens & USDG',image:'/__l5e/assets-v1/94329eb2-ae7d-463c-a6be-a490597a115f/private-stage-clean.png',to:'/app/shield',action:'Draw the curtain'},{roman:'II',name:'By your invitation',title:<>Choose your<br/><em>audience.</em></>,copy:'A single note. An account view. A considered invitation to the people you choose.',detail:'Selective disclosure',image:'/__l5e/assets-v1/3a85e301-5839-4847-acd8-27a62c0db4ef/invitation-clean.png',to:'/app/disclosure',action:'Decide who sees'},{roman:'III',name:'Your next act',title:<>More room<br/><em>to move.</em></>,copy:'Swap. Enter a vault. Return to the shield. A complete sequence in one atomic act.',detail:'Private DeFi with RelayAdapt',image:'/__l5e/assets-v1/e4ddc1f6-f56b-45c8-af1e-7c62404f6b52/center-stage-clean.png',to:'/app/recipes',action:'Compose your next act'}];
-export function SceneStory(){const el=useRef<HTMLDivElement>(null);const [active,setActive]=useState(0);useEffect(()=>{let frame=0;function update(){frame=0;const r=el.current?.getBoundingClientRect();if(!r)return;const range=Math.max(1,r.height-innerHeight);const p=Math.min(1,Math.max(0,-r.top/range));setActive(Math.min(2,Math.floor(p*3)));el.current?.style.setProperty('--story-progress',String(p));}function scroll(){if(!frame)frame=requestAnimationFrame(update)}update();addEventListener('scroll',scroll,{passive:true});addEventListener('resize',scroll);return()=>{removeEventListener('scroll',scroll);removeEventListener('resize',scroll);cancelAnimationFrame(frame)}},[]);function jump(i:number){const r=el.current!.getBoundingClientRect();window.scrollTo({top:scrollY+r.top+(r.height-innerHeight)*(i+.1)/3,behavior:document.documentElement.dataset['motion']==='off'?'auto':'smooth'})}return <div className="scene-story" ref={el}><div className="scene-sticky"><div className="scene-top"><span>A CURTAIN PERFORMANCE</span><span>SCENE 0{active+1} / 03</span></div>{scenes.map((s,i)=><section className={`story-scene ${active===i?'current':''}`} aria-hidden={active!==i} inert={active!==i?true:undefined} key={s.roman}><div className="story-image" style={{backgroundImage:`url(${s.image})`}}/><div className="story-shade"/><div className="story-copy"><span className="scene-roman">{s.roman}</span><p className="eyebrow">{s.detail}</p><h3>{s.title}</h3><p>{s.copy}</p><RouteLink to={s.to} className="underlined-link">{s.action}<ArrowUpRight size={16}/></RouteLink></div></section>)}<div className="scene-bottom"><div className="scene-selector" aria-label="Performance scenes">{scenes.map((s,i)=><button key={s.roman} aria-label={`Scene ${s.roman}: ${s.name}`} aria-pressed={i===active} onClick={()=>jump(i)}><span>{s.roman}</span><b>{s.name}</b></button>)}</div><span className="keep-scrolling">THE PLAY CONTINUES <ArrowDown size={14}/></span></div><div className="scene-progress"><span/></div></div></div>}
-export function ActProgramme(){const [active,setActive]=useState('top');useEffect(()=>{const ids=['top','experience','protocol','private-box'];const obs=new IntersectionObserver(entries=>{for(const e of entries)if(e.isIntersecting)setActive(e.target.id)},{rootMargin:'-15% 0px -40% 0px'});ids.forEach(id=>{const e=document.getElementById(id);if(e)obs.observe(e)});return()=>obs.disconnect()},[]);return <nav className="act-programme" aria-label="The performance programme">{[['top','0','Overture'],['experience','I','Privacy'],['protocol','II','Protocol'],['private-box','III','Your private box']].map(([id,n,title])=><a href={'#'+id} key={id} aria-label={title} className={active===id?'active':''}><span>{title}</span><b>{n}</b></a>)}</nav>}
-export function Soundscape(){const [on,setOn]=useState(false);const ac=useRef<AudioContext|null>(null);useEffect(()=>()=>{void ac.current?.close()},[]);async function toggle(){if(on){await ac.current?.suspend();setOn(false);return}try{if(!ac.current){const ctx=new AudioContext();ac.current=ctx;const gain=ctx.createGain();gain.gain.value=.009;gain.connect(ctx.destination);[130.81,196,261.63,329.63].forEach((frequency,i)=>{const osc=ctx.createOscillator();osc.type='sine';osc.frequency.value=frequency;osc.detune.value=i%2?3:-3;osc.connect(gain);osc.start()})}await ac.current.resume();setOn(true)}catch{setOn(false)}}useEffect(()=>{const visibility=()=>{if(document.hidden){void ac.current?.suspend();setOn(false)}};const mediaPlay=()=>{void ac.current?.suspend();setOn(false)};document.addEventListener('visibilitychange',visibility);document.addEventListener('play',mediaPlay,true);return()=>{document.removeEventListener('visibilitychange',visibility);document.removeEventListener('play',mediaPlay,true)}},[]);return <button className="sound-toggle" onClick={toggle} aria-pressed={on} aria-label={on?'Mute theatre ambience':'Play theatre ambience'}>{on?<Volume2 size={13}/>:<VolumeX size={13}/>}<span>Sound {on?'on':'off'}</span></button>}
+import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUpRight, Volume2, VolumeX } from "lucide-react";
+import { gsap } from "gsap";
+import { Logo, RouteLink } from "./App";
+export function TheatreEntrance() {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem("curtain-entered") !== "yes";
+    } catch {
+      return true;
+    }
+  });
+  const el = useRef<HTMLDialogElement>(null);
+  const opening = useRef(false);
+  useEffect(() => {
+    const replay = () => {
+      opening.current = false;
+      setOpen(true);
+    };
+    addEventListener("curtain:replay", replay);
+    return () => removeEventListener("curtain:replay", replay);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    el.current?.showModal();
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [open]);
+  function enter() {
+    if (opening.current) return;
+    opening.current = true;
+    try {
+      localStorage.setItem("curtain-entered", "yes");
+    } catch {
+      /* The entrance still works without device storage. */
+    }
+    const reduced =
+      document.documentElement.dataset["motion"] === "off" ||
+      matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      setOpen(false);
+      return;
+    }
+    const node = el.current!;
+    gsap
+      .timeline({
+        onComplete: () => {
+          setOpen(false);
+          document.querySelector<HTMLElement>(".hero h1")?.focus({ preventScroll: true });
+        },
+      })
+      .to(node.querySelector(".entrance-invitation"), { opacity: 0, y: -22, duration: 0.35 })
+      .to(
+        node.querySelector(".entrance-left"),
+        { xPercent: -101, duration: 1.75, ease: "power3.inOut" },
+        0.2,
+      )
+      .to(
+        node.querySelector(".entrance-right"),
+        { xPercent: 101, duration: 1.75, ease: "power3.inOut" },
+        0.2,
+      )
+      .to(node, { backgroundColor: "rgba(0,0,0,0)", duration: 0.2 }, 0.3);
+  }
+  return open ? (
+    <dialog
+      ref={el}
+      className="theatre-entrance"
+      aria-label="Welcome to the Curtain theatre"
+      onCancel={(e) => {
+        e.preventDefault();
+        enter();
+      }}
+    >
+      <div className="entrance-left" />
+      <div className="entrance-right" />
+      <div className="entrance-invitation">
+        <Logo compact />
+        <p className="eyebrow">A PRIVATE PERFORMANCE</p>
+        <h2>
+          The world is a stage.
+          <br />
+          <em>This one is yours.</em>
+        </h2>
+        <span className="invitation-rule" />
+        <button className="raise-curtain" onClick={enter}>
+          Raise the curtain <ArrowUpRight size={18} />
+        </button>
+        <p>CURTAIN · PRIVATE FINANCE IN THREE ACTS</p>
+      </div>
+      <button className="skip-entrance" onClick={enter}>
+        Enter directly
+      </button>
+    </dialog>
+  ) : null;
+}
+const scenes = [
+  {
+    roman: "I",
+    name: "A private position",
+    title: <>Hold your own.</>,
+    copy: "In a world that watches every move, your portfolio deserves its own private box.",
+    detail: "Private swaps · Stock Tokens & USDG",
+    image: "/__l5e/assets-v1/94329eb2-ae7d-463c-a6be-a490597a115f/private-stage-clean.png",
+    to: "/app/swap",
+    action: "Draw the curtain",
+  },
+  {
+    roman: "II",
+    name: "By your invitation",
+    title: (
+      <>
+        Choose your
+        <br />
+        <em>audience.</em>
+      </>
+    ),
+    copy: "Instant delivery or a random delay. A fresh recipient address. A considered way to move.",
+    detail: "Your recipient · Your timing",
+    image: "/__l5e/assets-v1/3a85e301-5839-4847-acd8-27a62c0db4ef/invitation-clean.png",
+    to: "/app/swap",
+    action: "Choose your timing",
+  },
+  {
+    roman: "III",
+    name: "Your next act",
+    title: (
+      <>
+        More room
+        <br />
+        <em>to move.</em>
+      </>
+    ),
+    copy: "Stake for 30, 90 or 180 days. Earn up to 2× rewards. Lending is coming soon.",
+    detail: "Stake-to-earn · Lending coming soon",
+    image: "/__l5e/assets-v1/e4ddc1f6-f56b-45c8-af1e-7c62404f6b52/center-stage-clean.png",
+    to: "/app/stake",
+    action: "Earn rewards",
+  },
+];
+export function SceneStory() {
+  const el = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    let frame = 0;
+    function update() {
+      frame = 0;
+      const r = el.current?.getBoundingClientRect();
+      if (!r) return;
+      const range = Math.max(1, r.height - innerHeight);
+      const p = Math.min(1, Math.max(0, -r.top / range));
+      setActive(Math.min(2, Math.floor(p * 3)));
+      el.current?.style.setProperty("--story-progress", String(p));
+    }
+    function scroll() {
+      if (!frame) frame = requestAnimationFrame(update);
+    }
+    update();
+    addEventListener("scroll", scroll, { passive: true });
+    addEventListener("resize", scroll);
+    return () => {
+      removeEventListener("scroll", scroll);
+      removeEventListener("resize", scroll);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+  function jump(i: number) {
+    const r = el.current!.getBoundingClientRect();
+    window.scrollTo({
+      top: scrollY + r.top + ((r.height - innerHeight) * (i + 0.1)) / 3,
+      behavior: document.documentElement.dataset["motion"] === "off" ? "auto" : "smooth",
+    });
+  }
+  return (
+    <div className="scene-story" ref={el}>
+      <div className="scene-sticky">
+        <div className="scene-top">
+          <span>A CURTAIN PERFORMANCE</span>
+          <span>SCENE 0{active + 1} / 03</span>
+        </div>
+        {scenes.map((s, i) => (
+          <section
+            className={`story-scene ${active === i ? "current" : ""}`}
+            aria-hidden={active !== i}
+            inert={active !== i ? true : undefined}
+            key={s.roman}
+          >
+            <div className="story-image" style={{ backgroundImage: `url(${s.image})` }} />
+            <div className="story-shade" />
+            <div className="story-copy">
+              <span className="scene-roman">{s.roman}</span>
+              <p className="eyebrow">{s.detail}</p>
+              <h3>{s.title}</h3>
+              <p>{s.copy}</p>
+              <RouteLink to={s.to} className="underlined-link">
+                {s.action}
+                <ArrowUpRight size={16} />
+              </RouteLink>
+            </div>
+          </section>
+        ))}
+        <div className="scene-bottom">
+          <div className="scene-selector" aria-label="Performance scenes">
+            {scenes.map((s, i) => (
+              <button
+                key={s.roman}
+                aria-label={`Scene ${s.roman}: ${s.name}`}
+                aria-pressed={i === active}
+                onClick={() => jump(i)}
+              >
+                <span>{s.roman}</span>
+                <b>{s.name}</b>
+              </button>
+            ))}
+          </div>
+          <span className="keep-scrolling">
+            THE PLAY CONTINUES <ArrowDown size={14} />
+          </span>
+        </div>
+        <div className="scene-progress">
+          <span />
+        </div>
+      </div>
+    </div>
+  );
+}
+export function ActProgramme() {
+  const [active, setActive] = useState("top");
+  useEffect(() => {
+    const ids = ["top", "experience", "protocol", "private-box"];
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) if (e.isIntersecting) setActive(e.target.id);
+      },
+      { rootMargin: "-15% 0px -40% 0px" },
+    );
+    ids.forEach((id) => {
+      const e = document.getElementById(id);
+      if (e) obs.observe(e);
+    });
+    return () => obs.disconnect();
+  }, []);
+  return (
+    <nav className="act-programme" aria-label="The performance programme">
+      {[
+        ["top", "0", "Overture"],
+        ["experience", "I", "Privacy"],
+        ["protocol", "II", "Protocol"],
+        ["private-box", "III", "Your private box"],
+      ].map(([id, n, title]) => (
+        <a href={"#" + id} key={id} aria-label={title} className={active === id ? "active" : ""}>
+          <span>{title}</span>
+          <b>{n}</b>
+        </a>
+      ))}
+    </nav>
+  );
+}
+export function Soundscape() {
+  const [on, setOn] = useState(false);
+  const ac = useRef<AudioContext | null>(null);
+  useEffect(
+    () => () => {
+      void ac.current?.close();
+    },
+    [],
+  );
+  async function toggle() {
+    if (on) {
+      await ac.current?.suspend();
+      setOn(false);
+      return;
+    }
+    try {
+      if (!ac.current) {
+        const ctx = new AudioContext();
+        ac.current = ctx;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.009;
+        gain.connect(ctx.destination);
+        [130.81, 196, 261.63, 329.63].forEach((frequency, i) => {
+          const osc = ctx.createOscillator();
+          osc.type = "sine";
+          osc.frequency.value = frequency;
+          osc.detune.value = i % 2 ? 3 : -3;
+          osc.connect(gain);
+          osc.start();
+        });
+      }
+      await ac.current.resume();
+      setOn(true);
+    } catch {
+      setOn(false);
+    }
+  }
+  useEffect(() => {
+    const visibility = () => {
+      if (document.hidden) {
+        void ac.current?.suspend();
+        setOn(false);
+      }
+    };
+    const mediaPlay = () => {
+      void ac.current?.suspend();
+      setOn(false);
+    };
+    document.addEventListener("visibilitychange", visibility);
+    document.addEventListener("play", mediaPlay, true);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      document.removeEventListener("play", mediaPlay, true);
+    };
+  }, []);
+  return (
+    <button
+      className="sound-toggle"
+      onClick={toggle}
+      aria-pressed={on}
+      aria-label={on ? "Mute theatre ambience" : "Play theatre ambience"}
+    >
+      {on ? <Volume2 size={13} /> : <VolumeX size={13} />}
+      <span>Sound {on ? "on" : "off"}</span>
+    </button>
+  );
+}
