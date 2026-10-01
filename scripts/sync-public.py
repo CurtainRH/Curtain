@@ -19,6 +19,10 @@ SOURCE_BRANCH = "main"
 PUBLIC_BRANCH = "public-main"
 PUBLIC_REMOTE = "origin-public"
 
+# Paths left out of the public history: `--exclude <prefix>` (repeatable). Used when the public
+# token lacks GitHub's `workflow` scope, which is required to push .github/workflows/ files.
+EXCLUDE: list[bytes] = []
+
 IDENT = re.compile(rb"^(author|committer|tagger) .*? <[^>]*> (\d+ [+-]\d{4})\n$")
 
 
@@ -37,6 +41,10 @@ def rewrite(src, dst):
             size = int(line[5:].strip())
             dst.write(src.read(size))
             continue
+        if EXCLUDE and (line.startswith(b"M ") or line.startswith(b"D ")):
+            path = line.rstrip(b"\n").split(b" ", 3)[-1] if line.startswith(b"M ") else line[2:].rstrip(b"\n")
+            if any(path.startswith(prefix) for prefix in EXCLUDE):
+                continue
         m = IDENT.match(line)
         if m:
             line = b"%s %s <%s> %s\n" % (m.group(1), PUBLIC_NAME, PUBLIC_EMAIL, m.group(2))
@@ -49,6 +57,10 @@ def rewrite(src, dst):
 
 def main():
     push = "--no-push" not in sys.argv
+    args = sys.argv[1:]
+    for i, a in enumerate(args):
+        if a == "--exclude" and i + 1 < len(args):
+            EXCLUDE.append(args[i + 1].encode())
 
     exporter = subprocess.Popen(
         ["git", "fast-export", "--signed-tags=strip", "--tag-of-filtered-object=drop", SOURCE_BRANCH],

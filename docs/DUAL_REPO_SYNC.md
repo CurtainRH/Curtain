@@ -51,6 +51,8 @@ The rewrite is deterministic, so each sync only appends new commits on the publi
 - **Public `main` is force-overwritten on every sync.** Anything pushed directly to the public repo (for example, merged external PRs) must first be brought into private `main`, or the next sync will erase it.
 - **Never force-push `origin`.** Lovable is connected to it, and rewriting its history breaks the Lovable project.
 
+**Leaving paths out.** `--exclude <prefix>` (repeatable) drops those paths from the public history. Use `--exclude .github/workflows/` when the public token lacks GitHub's `workflow` scope, which is required to push workflow files.
+
 ## 4. Layout
 
 The frontend stays at the repo root because Lovable and Vercel build from there. The backend Bun workspace lives in `backend/`. Product docs live in `docs/`. See the root [README](../README.md).
