@@ -21,4 +21,9 @@ line_length = 120
 tab_width = 4
 bracket_spacing = true
 
+[invariant]
+runs = 64
+depth = 32
+fail_on_revert = false
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
