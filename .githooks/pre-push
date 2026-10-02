@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Scan the outgoing history except commits the public repo already has.
+set -euo pipefail
+guard="$(cd "$(dirname "$0")" && pwd)/publish-guard.sh"
+public_url="https://github.com/CurtainRH/curtain.git"
+published=()
+if public_sha=$(git ls-remote "$public_url" refs/heads/main 2>/dev/null | cut -f1) \
+  && [ -n "$public_sha" ] && git cat-file -e "$public_sha^{commit}" 2>/dev/null; then
+  published=(--not "$public_sha")
+fi
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+  "$guard" range "$local_sha" ${published[@]+"${published[@]}"}
+done
