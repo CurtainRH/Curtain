@@ -104,7 +104,11 @@ describe("restricted recipients (e2e)", () => {
     expect((await status(bisected)).blocked_reason).toContain("settlement reverts");
 
     await op.submitSettlements(await d.now());
-    await op.syncChain();
+    for (let i = 0; i < 20; i++) {
+      await op.syncChain();
+      if ((await status(good)).status === "paid") break;
+      await Bun.sleep(100);
+    }
     expect((await status(good)).status).toBe("paid");
     expect(await d.publicClient.readContract({ address: rst, abi: ERC20_ABI, functionName: "balanceOf", args: [okRecipient] })).toBeGreaterThan(0n);
 
