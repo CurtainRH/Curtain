@@ -8,11 +8,11 @@
     "services/*"
   ],
   "scripts": {
-    "test": "bun test --path-ignore-patterns '**/contracts/lib/**'",
+    "test": "bun test packages services",
     "typecheck": "bun run --filter='*' typecheck",
     "lint": "bun run --filter='*' lint",
     "build": "bun run --filter='*' build",
-    "test:unit": "bun test --path-ignore-patterns '**/contracts/lib/**' --path-ignore-patterns '**/*.e2e.test.ts'",
+    "test:unit": "bun test packages services --path-ignore-patterns '**/*.e2e.test.ts'",
     "check": "bun run typecheck"
   },
   "devDependencies": {
