@@ -23,7 +23,7 @@ PUBLIC_REMOTE = "origin-public"
 # token lacks GitHub's `workflow` scope, which is required to push .github/workflows/ files.
 EXCLUDE: list[bytes] = []
 
-IDENT = re.compile(rb"^(author|committer|tagger) .*? <[^>]*> (\d+ [+-]\d{4})\n$")
+IDENT = re.compile(rb"^(author|committer|tagger) .*? <[^>]*> (\d+) [+-]\d{4}\n$")
 
 
 def run(*args, **kw):
@@ -47,7 +47,7 @@ def rewrite(src, dst):
                 continue
         m = IDENT.match(line)
         if m:
-            line = b"%s %s <%s> %s\n" % (m.group(1), PUBLIC_NAME, PUBLIC_EMAIL, m.group(2))
+            line = b"%s %s <%s> %s +0000\n" % (m.group(1), PUBLIC_NAME, PUBLIC_EMAIL, m.group(2))
         elif line.startswith(b"commit refs/heads/%s" % SOURCE_BRANCH.encode()):
             line = b"commit refs/heads/%s\n" % PUBLIC_BRANCH.encode()
         elif line.startswith(b"reset refs/heads/%s" % SOURCE_BRANCH.encode()):
