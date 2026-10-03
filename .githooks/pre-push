@@ -10,5 +10,9 @@ if public_sha=$(git ls-remote "$public_url" refs/heads/main 2>/dev/null | cut -f
 fi
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
-  "$guard" range "$local_sha" ${published[@]+"${published[@]}"}
+  if [ -n "$remote_sha" ] && [ "$remote_sha" != "0000000000000000000000000000000000000000" ]; then
+    "$guard" range "$remote_sha..$local_sha"
+  else
+    "$guard" range "$local_sha" ${published[@]+"${published[@]}"}
+  fi
 done
