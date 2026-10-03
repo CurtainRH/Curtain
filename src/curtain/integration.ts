@@ -16,7 +16,7 @@ import {
 } from "viem";
 import { CurtainClient, type EscapeTicket, type PendingTicket } from "@curtain/sdk";
 const env = import.meta.env;
-export const apiUrl = (env["VITE_CURTAIN_API_URL"] || "").replace(/\/$/, "");
+export const apiUrl = (env["VITE_CURTAIN_API_URL"] || "/api/curtain").replace(/\/$/, "");
 export const chain = defineChain({
   id: Number(env["VITE_CHAIN_ID"] || 4663),
   name: Number(env["VITE_CHAIN_ID"] || 4663) === 4663 ? "Robinhood Chain" : "Curtain local chain",

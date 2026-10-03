@@ -1,0 +1,29 @@
+WEBVTT
+
+00:00:03.180 --> 00:00:06.900
+Curtain is designed around shielded notes
+for stocks and USDG.
+
+00:00:07.300 --> 00:00:11.100
+Zero-knowledge proofs verify a spend
+without revealing private details.
+
+00:00:12.200 --> 00:00:16.500
+RelayAdapt combines unshielding,
+a swap or vault action, and reshielding.
+
+00:00:16.650 --> 00:00:17.700
+One transaction.
+
+00:00:18.200 --> 00:00:20.300
+If one step fails, everything reverts.
+
+00:00:21.050 --> 00:00:23.100
+View keys reveal a chosen account or note.
+
+00:00:23.650 --> 00:00:26.700
+The origin-only exit returns assets
+to the depositing wallet.
+
+00:00:27.100 --> 00:00:29.850
+Curtain. Privacy, by design.
